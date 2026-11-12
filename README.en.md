@@ -72,3 +72,11 @@ no commercial resale. Third-party components (Microsoft Edge WebView2) are cover
 
 Open an [issue](../../issues) with your Windows version, the steps, and which part broke
 (won't start / timing wrong / data lost). If it failed to start, paste the dialog text — it names the cause.
+
+---
+
+## More from the same author
+
+- [LuHui Player](https://github.com/gedouluhui/luhui-player) — a Windows video player built on mpv with a hand-drawn Fluent UI
+- [LuHui Music Player](https://github.com/gedouluhui/luhui-music-player) — WinUI 3 shell + WASAPI exclusive-mode music player
+- [pc-phone-proxy](https://github.com/gedouluhui/pc-phone-proxy) — auto-selecting proxy for Windows and Android

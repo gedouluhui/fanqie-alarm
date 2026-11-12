@@ -110,3 +110,11 @@ ELECTRON_RUN_AS_NODE=1 "<path-to>\Code.exe" 验收/timing_harness.js index.html 
 
 用出问题或想要某个功能，直接开 [Issue](../../issues)；请带上 Windows 版本、复现步骤，
 以及"是哪一步出的问题"（打不开 / 计时不对 / 数据丢了）。程序在启动失败时会弹窗写清原因，把那句话一起贴上即可。
+
+---
+
+## 同作者的其他项目
+
+- [LuHui播放器](https://github.com/gedouluhui/luhui-player) —— mpv 内核 + 手绘 Fluent 外壳的本地视频播放器
+- [LuHui音乐播放器](https://github.com/gedouluhui/luhui-music-player) —— WinUI 3 + WASAPI 独占的本地音乐播放器
+- [pc-phone-proxy](https://github.com/gedouluhui/pc-phone-proxy) —— 电脑 + 安卓双端自动选线代理
