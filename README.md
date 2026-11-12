@@ -76,8 +76,11 @@ bash native/build_ship.sh              # 交付件 -> native/dist/番茄闹钟.e
 python 验收/page_regress.py
 
 # 41 行计时真值表（从 index.html 现盘切真代码跑，锚点缺失直接 rc=3）
-ELECTRON_RUN_AS_NODE=1 <electron.exe> 验收/timing_harness.js index.html after
+# 需要一个 Electron 二进制当 Node 用：VS Code / Qoder / Electron 发行包里的 exe 都行
+ELECTRON_RUN_AS_NODE=1 "<path-to>\Code.exe" 验收/timing_harness.js index.html after
 ```
+
+两条门禁都不碰真机数据：`page_regress.py` 起的是独立窗口、临时 profile；真值表的时钟是注入的假时钟。
 
 当前状态：`PAGE-REG ALL-OK`（12/12）、`真值表 41 行，红 0 行`。
 
@@ -104,4 +107,4 @@ ELECTRON_RUN_AS_NODE=1 <electron.exe> 验收/timing_harness.js index.html after
 ## 反馈
 
 用出问题或想要某个功能，直接开 [Issue](../../issues)；请带上 Windows 版本、复现步骤，
-崩溃时附上 `%LOCALAPPDATA%\FanqieAlarm\webview2` 下的日志（如果有）。
+以及"是哪一步出的问题"（打不开 / 计时不对 / 数据丢了）。程序在启动失败时会弹窗写清原因，把那句话一起贴上即可。
