@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方案 A · 纸感编辑风</title>
+<style>
+  :root{
+    --bg:#F5F1E8; --paper:#FBF8F1; --ink:#1C1B18; --sub:#756E61; --faint:#9C9486;
+    --hair:#DDD5C6; --accent:#C1412A; --accent-ink:#A63420;
+    --font:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC",sans-serif;
+    --num:"Bahnschrift","Segoe UI Variable Display","Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:#E7E1D4;font-family:var(--font);color:var(--ink);
+    -webkit-font-smoothing:antialiased;text-rendering:geometricPrecision}
+  body{display:flex;justify-content:center;padding:30px 0}
+  .board{display:flex;gap:34px;align-items:flex-start}
+
+  .app{position:relative;width:460px;height:940px;overflow:hidden;display:flex;flex-direction:column;
+    background:
+      radial-gradient(120% 70% at 12% 0%,rgba(193,65,42,.045),transparent 58%),
+      radial-gradient(90% 60% at 100% 100%,rgba(120,105,70,.05),transparent 55%),
+      var(--bg);
+    border-radius:20px;box-shadow:0 24px 60px -30px rgba(48,38,24,.35),0 0 0 1px rgba(60,48,32,.08)}
+  .grain{position:absolute;inset:0;pointer-events:none;opacity:.05;mix-blend-mode:multiply;
+    background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" stitchTiles="stitch"/></filter><rect width="140" height="140" filter="url(%23n)" opacity="0.55"/></svg>')}
+
+  /* ---------- 顶栏 ---------- */
+  .hd{height:62px;flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;
+    padding:0 26px;border-bottom:1px solid var(--hair)}
+  .date{font-size:12px;color:var(--sub);letter-spacing:.3px}
+  .hdr-right{display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--sub)}
+  .hdr-right b{font-family:var(--num);font-size:13px;font-weight:600;color:var(--ink);letter-spacing:.3px}
+  .hr-div{width:1px;height:11px;background:var(--hair)}
+  .tomato{width:7px;height:7px;border-radius:50% 50% 50% 2px;background:var(--accent);
+    transform:rotate(-45deg);display:inline-block;margin-right:4px}
+  .hdr-right .ic{width:16px;height:16px;color:var(--sub);margin-left:2px}
+
+  /* ---------- 计时页 ---------- */
+  .main{flex:1 1 auto;padding:0 28px;min-height:0}
+  .modes{margin-top:22px;display:flex;align-items:flex-end;justify-content:space-between}
+  .tabs{display:flex;gap:24px}
+  .tabs span{position:relative;font-size:13px;color:var(--sub);padding-bottom:9px}
+  .tabs span.on{color:var(--ink);font-weight:600}
+  .tabs span.on::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--accent)}
+  .utils{display:flex;align-items:center;gap:10px;color:var(--sub)}
+  .utils .mode{font-size:10.5px;border:1px solid var(--hair);border-radius:4px;padding:3px 8px;color:var(--sub)}
+  .utils .ic{width:15px;height:15px}
+
+  .clockwrap{position:relative;width:258px;height:258px;margin:24px auto 0}
+  .ring{position:absolute;inset:0;width:100%;height:100%}
+  .clock{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .kicker{font-size:9.5px;letter-spacing:2.6px;color:var(--sub);text-transform:uppercase}
+  .time{font-family:var(--num);font-weight:300;font-size:70px;line-height:1.04;letter-spacing:.5px;
+    color:var(--ink);font-variant-numeric:tabular-nums;margin-top:2px}
+  .round{font-size:11px;color:var(--sub);margin-top:5px;letter-spacing:.3px}
+
+  .taskbar{margin-top:24px;border:1px solid var(--hair);background:rgba(255,252,246,.62);
+    border-radius:8px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .tb-l{min-width:0}
+  .tb-k{font-size:9px;letter-spacing:1.2px;color:var(--faint);text-transform:uppercase}
+  .tb-t{font-size:12.5px;color:var(--ink);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .taskbar .ic{width:15px;height:15px;color:var(--faint);flex:0 0 auto}
+
+  .presets{margin-top:22px;display:flex;justify-content:center;align-items:center;gap:21px}
+  .presets span{position:relative;font-size:12.5px;color:var(--sub);padding-bottom:6px}
+  .presets span.on{color:var(--accent-ink);font-weight:600}
+  .presets span.on::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--accent)}
+  .custom{margin-top:11px;text-align:center;font-size:11px;color:var(--faint);letter-spacing:.2px}
+  .custom u{text-decoration:none;color:var(--ink);border-bottom:1px solid var(--hair);padding:0 3px 1px}
+  .custom b{font-weight:500;color:var(--sub);margin-left:4px}
+
+  .actions{margin-top:24px;display:flex;align-items:center;justify-content:center;gap:20px}
+  .btn-primary{height:46px;padding:0 22px;border-radius:8px;background:var(--accent);color:#FFF8F1;
+    display:inline-flex;align-items:center;gap:11px;font-size:14px;font-weight:600;letter-spacing:.4px;
+    box-shadow:0 1px 0 rgba(255,255,255,.22) inset}
+  .btn-primary .kbd{font-size:9px;font-weight:400;letter-spacing:.5px;padding:2px 5px;border-radius:3px;
+    border:1px solid rgba(255,248,241,.42);color:rgba(255,248,241,.92)}
+  .btn-ghost{font-size:12px;color:var(--sub);background:none;border:none;letter-spacing:.3px}
+
+  .dots{margin-top:20px;display:flex;justify-content:center;gap:7px}
+  .dots i{width:6px;height:6px;border-radius:50%;border:1px solid rgba(28,27,24,.24)}
+  .dots i.f{background:var(--accent);border-color:var(--accent)}
+  .foot{margin-top:14px;text-align:center;font-size:10.5px;color:var(--faint);letter-spacing:.2px}
+
+  /* ---------- 底栏 ---------- */
+  .nav{flex:0 0 auto;height:66px;border-top:1px solid var(--hair);background:rgba(251,248,241,.86);
+    display:grid;grid-template-columns:repeat(5,1fr);align-items:center}
+  .nav a{position:relative;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:4px;font-size:10px;color:var(--faint);text-decoration:none}
+  .nav a .ic{width:19px;height:19px}
+  .nav a.on{color:var(--ink)}
+  .nav a.on::before{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);width:16px;height:2px;background:var(--accent)}
+
+  /* ---------- 待办页 ---------- */
+  .todo-title{margin-top:24px;display:flex;align-items:baseline;justify-content:space-between}
+  .todo-title h1{font-size:22px;font-weight:600;letter-spacing:.4px}
+  .todo-title .count{font-size:11px;color:var(--sub)}
+  .addrow{margin-top:16px;display:flex;gap:8px}
+  .input{flex:1;height:42px;border:1px solid var(--hair);border-radius:8px;background:rgba(255,252,246,.66);
+    display:flex;align-items:center;gap:9px;padding:0 12px;font-size:12.5px;color:var(--faint)}
+  .input .ic{width:14px;height:14px}
+  .coll{width:84px;height:42px;border:1px solid var(--hair);border-radius:8px;display:flex;align-items:center;
+    justify-content:center;gap:5px;font-size:12px;color:var(--sub);background:transparent}
+  .coll svg{width:11px;height:11px}
+  .add-btn{width:64px;height:42px;border-radius:8px;background:var(--ink);color:var(--paper);
+    display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:600;letter-spacing:.4px}
+
+  .filters{margin-top:19px;display:flex;align-items:center;gap:17px;font-size:12px;color:var(--sub)}
+  .filters span{position:relative;padding-bottom:8px}
+  .filters span.on{color:var(--ink);font-weight:600}
+  .filters span.on::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--accent)}
+  .filters .search{margin-left:auto;display:flex;padding-bottom:6px;color:var(--faint)}
+  .filters .search svg{width:15px;height:15px}
+
+  .list{margin-top:12px;border-top:1px solid var(--hair)}
+  .row{display:grid;grid-template-columns:20px 20px minmax(0,1fr) 18px;align-items:center;gap:11px;
+    padding:14px 8px 14px 6px;border-bottom:1px solid var(--hair);border-radius:3px}
+  .row .idx{font-family:var(--num);font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums;letter-spacing:.5px}
+  .check{width:18px;height:18px;border-radius:50%;border:1.3px solid rgba(28,27,24,.34);position:relative}
+  .row .body{min-width:0}
+  .row .t{font-size:13.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.1px}
+  .row .meta{display:flex;align-items:center;gap:7px;margin-top:6px;font-size:10px;color:var(--sub)}
+  .row .meta .pom{width:6px;height:6px;border-radius:50% 50% 50% 1.5px;background:var(--accent);
+    transform:rotate(-45deg);flex:0 0 auto}
+  .row .meta .pnum{font-family:var(--num);font-variant-numeric:tabular-nums;letter-spacing:.4px}
+  .row .meta .track{width:34px;height:2px;background:var(--hair);border-radius:2px;overflow:hidden;flex:0 0 auto}
+  .row .meta .track i{display:block;height:100%;background:var(--accent)}
+  .row .meta .tags{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .dots3{width:14px;height:14px;color:var(--faint)}
+  .row.active{background:rgba(193,65,42,.05);box-shadow:inset 2px 0 0 var(--accent);padding-left:8px}
+  .row.done{opacity:.52}
+  .row.done .check{background:var(--sub);border-color:var(--sub)}
+  .row.done .check::after{content:"";position:absolute;left:5px;top:3px;width:5px;height:8px;
+    border-right:1.3px solid var(--paper);border-bottom:1.3px solid var(--paper);transform:rotate(42deg)}
+  .row.done .t{text-decoration:line-through;text-decoration-color:rgba(28,27,24,.3)}
+  .todo-foot{margin-top:14px;font-size:10.5px;color:var(--faint);display:flex;justify-content:space-between}
+
+  /* 计时页底部的今日摘要：把下半部的空场收住，也给数据一个安静的落点 */
+  .dayline{flex:0 0 auto;margin:0 28px;padding:13px 0 12px;border-top:1px solid var(--hair);
+    display:grid;grid-template-columns:1fr 1fr 1fr;align-items:flex-end}
+  .dayline .dcell{display:flex;flex-direction:column;gap:3px}
+  .dayline .dcell:nth-child(2){align-items:center}
+  .dayline .dcell:nth-child(3){align-items:flex-end}
+  .dayline span{font-size:9px;letter-spacing:1.4px;color:var(--faint);text-transform:uppercase}
+  .dayline b{font-family:var(--num);font-weight:400;font-size:16px;letter-spacing:.4px;color:var(--ink);
+    font-variant-numeric:tabular-nums}
+  .dayline em{font-style:normal;font-size:10px;color:var(--sub);margin-left:3px;letter-spacing:.2px}
+
+  @media (max-width:1000px){body{padding:0}.board{flex-direction:column;gap:20px}.app{border-radius:0}}
+</style>
+</head>
+<body>
+<div class="board">
+
+  <!-- ================= 计时 ================= -->
+  <section class="app">
+    <div class="grain"></div>
+    <header class="hd">
+      <div class="date">10月31日 星期六</div>
+      <div class="hdr-right">
+        <span>今日 <b>98′</b></span><span class="hr-div"></span>
+        <span><i class="tomato"></i>3</span>
+        <svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="9" cy="9" r="5.2"/><path d="M13 13l3.4 3.4" stroke-linecap="round"/></svg>
+      </div>
+    </header>
+
+    <main class="main">
+      <div class="modes">
+        <div class="tabs"><span class="on">专注</span><span>短休</span><span>长休</span></div>
+        <div class="utils">
+          <span class="mode">普通</span>
+          <svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 7h14M3 13h14" stroke-linecap="round"/><circle cx="7" cy="7" r="2.1" fill="#F5F1E8"/><circle cx="13" cy="13" r="2.1" fill="#F5F1E8"/></svg>
+          <svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 3H4a1 1 0 0 0-1 1v3M13 3h3a1 1 0 0 1 1 1v3M7 17H4a1 1 0 0 1-1-1v-3M13 17h3a1 1 0 0 0 1-1v-3" stroke-linecap="round"/></svg>
+        </div>
+      </div>
+
+      <div class="clockwrap">
+        <svg class="ring" viewBox="0 0 256 256" fill="none">
+          <circle cx="128" cy="128" r="119" stroke="rgba(28,27,24,.16)" stroke-width="1"/>
+          <circle cx="128" cy="128" r="119" stroke="#C1412A" stroke-width="2.4" stroke-linecap="round"
+            stroke-dasharray="373.8 747.7" transform="rotate(-90 128 128)"/>
+          <g stroke="rgba(28,27,24,.30)" stroke-width="1">
+            <path d="M128 17v8"/><path d="M128 231v8"/>
+            <path d="M17 128h8"/><path d="M231 128h8"/>
+          </g>
+          <g stroke="rgba(28,27,24,.13)" stroke-width="1">
+            <g transform="rotate(30 128 128)"><path d="M128 19v6"/></g>
+            <g transform="rotate(60 128 128)"><path d="M128 19v6"/></g>
+            <g transform="rotate(120 128 128)"><path d="M128 19v6"/></g>
+            <g transform="rotate(150 128 128)"><path d="M128 19v6"/></g>
+            <g transform="rotate(210 128 128)"><path d="M128 19v6"/></g>
+            <g transform="rotate(240 128 128)"><path d="M128 19v6"/></g>
+            <g transform="rotate(300 128 128)"><path d="M128 19v6"/></g>
+            <g transform="rotate(330 128 128)"><path d="M128 19v6"/></g>
+          </g>
+        </svg>
+        <div class="clock">
+          <div class="kicker">Focus · 专注</div>
+          <div class="time">25:00</div>
+          <div class="round">第 2 轮 · 共 4 轮</div>
+        </div>
+      </div>
+
+      <div class="taskbar">
+        <div class="tb-l">
+          <div class="tb-k">Current task</div>
+          <div class="tb-t">18 年数学一真题第 2 套：完成并整理错题</div>
+        </div>
+        <svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 5l5 5-5 5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+
+      <div class="presets"><span class="on">25′</span><span>30′</span><span>45′</span><span>50′</span><span>60′</span></div>
+      <div class="custom">自定义 <u>25</u> 分钟 <b>设定</b></div>
+
+      <div class="actions">
+        <button class="btn-ghost">重置</button>
+        <button class="btn-primary">开始专注 <span class="kbd">空格</span></button>
+        <button class="btn-ghost">跳过</button>
+      </div>
+
+      <div class="dots"><i class="f"></i><i class="f"></i><i></i><i></i></div>
+      <div class="foot">普通模式：随时暂停、结束，不做中断判定。</div>
+    </main>
+
+    <div class="dayline">
+      <div class="dcell"><span>今日专注</span><b>98′</b></div>
+      <div class="dcell"><span>番茄</span><b>3</b></div>
+      <div class="dcell"><span>连续</span><b>12<em>天</em></b></div>
+    </div>
+
+    <nav class="nav">
+      <a href="#"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 5h12M4 10h12M4 15h8"/></svg><span>待办</span></a>
+      <a href="#"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h3l1.5 2h6.5A1.5 1.5 0 0 1 17 8.5v6A1.5 1.5 0 0 1 15.5 16h-11A1.5 1.5 0 0 1 3 14.5z"/></svg><span>待办集</span></a>
+      <a class="on" href="#"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="10" cy="10" r="7"/><path d="M10 6.2v4l2.6 1.6" stroke-linecap="round"/></svg><span>番茄钟</span></a>
+      <a href="#"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 16V9.5M8.7 16V5.5M13.4 16v-4M18 16V7.5" stroke-width="1.6"/></svg><span>数据统计</span></a>
+      <a href="#"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="10" cy="7" r="3"/><path d="M4.5 16c.6-3 2.7-4.6 5.5-4.6s4.9 1.6 5.5 4.6" stroke-linecap="round"/></svg><span>我的</span></a>
+    </nav>
+  </section>
+
+  <!-- ================= 待办 ================= -->
+  <section class="app">
+    <div class="grain"></div>
+    <header class="hd">
+      <div class="date">10月31日 星期六</div>
+      <div class="hdr-right">
+        <span>今日 <b>98′</b></span><span class="hr-div"></span>
+        <span><i class="tomato"></i>3</span>
+        <svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="9" cy="9" r="5.2"/><path d="M13 13l3.4 3.4" stroke-linecap="round"/></svg>
+      </div>
+    </header>
+
+    <main class="main">
+      <div class="todo-title"><h1>待办</h1><span class="count">共 10 个 · 未完成 8 · 已完成 2</span></div>
+
+      <div class="addrow">
+        <div class="input">
+          <svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M10 5v10M5 10h10"/></svg>
+          <span>添加一个任务，回车确认</span>
+        </div>
+        <div class="coll">默认 <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 4l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div class="add-btn">添加</div>
+      </div>
+
+      <div class="filters">
+        <span class="on">全部</span><span>今日</span><span>未完成</span><span>数学一</span><span>英语</span>
+        <span class="search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="9" cy="9" r="5.2"/><path d="M13 13l3.4 3.4" stroke-linecap="round"/></svg></span>
+      </div>
+
+      <div class="list">
+        <div class="row">
+          <span class="idx">01</span><span class="check"></span>
+          <div class="body"><div class="t">线代：特征值与二次型复习</div>
+            <div class="meta"><i class="pom"></i><span class="pnum">0 / 3</span><span class="track"><i style="width:4%"></i></span><span class="tags">数学一</span></div></div>
+          <svg class="dots3" viewBox="0 0 14 14" fill="currentColor"><circle cx="7" cy="3" r="1.1"/><circle cx="7" cy="7" r="1.1"/><circle cx="7" cy="11" r="1.1"/></svg>
+        </div>
+        <div class="row active">
+          <span class="idx">02</span><span class="check"></span>
+          <div class="body"><div class="t">18 年数学一真题第 2 套：完成并整理错题</div>
+            <div class="meta"><i class="pom"></i><span class="pnum">1 / 2</span><span class="track"><i style="width:50%"></i></span><span class="tags">数学一 · 今日</span></div></div>
+          <svg class="dots3" viewBox="0 0 14 14" fill="currentColor"><circle cx="7" cy="3" r="1.1"/><circle cx="7" cy="7" r="1.1"/><circle cx="7" cy="11" r="1.1"/></svg>
+        </div>
+        <div class="row">
+          <span class="idx">03</span><span class="check"></span>
+          <div class="body"><div class="t">408 数据结构：图的最短路径手写</div>
+            <div class="meta"><i class="pom"></i><span class="pnum">1 / 2</span><span class="track"><i style="width:50%"></i></span><span class="tags">408 专业课</span></div></div>
+          <svg class="dots3" viewBox="0 0 14 14" fill="currentColor"><circle cx="7" cy="3" r="1.1"/><circle cx="7" cy="7" r="1.1"/><circle cx="7" cy="11" r="1.1"/></svg>
+        </div>
+        <div class="row">
+          <span class="idx">04</span><span class="check"></span>
+          <div class="body"><div class="t">英语作文模板整理：图表 + 书信</div>
+            <div class="meta"><i class="pom"></i><span class="pnum">0 / 2</span><span class="track"><i style="width:4%"></i></span><span class="tags">英语 · 今日</span></div></div>
+          <svg class="dots3" viewBox="0 0 14 14" fill="currentColor"><circle cx="7" cy="3" r="1.1"/><circle cx="7" cy="7" r="1.1"/><circle cx="7" cy="11" r="1.1"/></svg>
+        </div>
+        <div class="row done">
+          <span class="idx">05</span><span class="check"></span>
+          <div class="body"><div class="t">整理这周的错题本</div>
+            <div class="meta"><i class="pom"></i><span class="pnum">2 / 2</span><span class="track"><i style="width:100%"></i></span><span class="tags">默认 · 今日</span></div></div>
+          <svg class="dots3" viewBox="0 0 14 14" fill="currentColor"><circle cx="7" cy="3" r="1.1"/><circle cx="7" cy="7" r="1.1"/><circle cx="7" cy="11" r="1.1"/></svg>
+        </div>
+      </div>
+      <div class="todo-foot"><span>只显示未完成 · 按创建时间排序</span><span>清理已完成</span></div>
+    </main>
+
+    <nav class="nav">
+      <a class="on" href="#"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 5h12M4 10h12M4 15h8"/></svg><span>待办</span></a>
+      <a href="#"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h3l1.5 2h6.5A1.5 1.5 0 0 1 17 8.5v6A1.5 1.5 0 0 1 15.5 16h-11A1.5 1.5 0 0 1 3 14.5z"/></svg><span>待办集</span></a>
+      <a href="#"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="10" cy="10" r="7"/><path d="M10 6.2v4l2.6 1.6" stroke-linecap="round"/></svg><span>番茄钟</span></a>
+      <a href="#"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 16V9.5M8.7 16V5.5M13.4 16v-4M18 16V7.5" stroke-width="1.6"/></svg><span>数据统计</span></a>
+      <a href="#"><svg class="ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="10" cy="7" r="3"/><path d="M4.5 16c.6-3 2.7-4.6 5.5-4.6s4.9 1.6 5.5 4.6" stroke-linecap="round"/></svg><span>我的</span></a>
+    </nav>
+  </section>
+</div>
+</body>
+</html>

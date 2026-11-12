@@ -1,0 +1,23 @@
+# 构建产物
+native/dist/
+native/FqGlass.exe
+*.exe
+*.pdb
+
+# 微软的二进制不进仓库（README 有取法）
+native/Microsoft.Web.WebView2.*.dll
+native/WebView2Loader.dll
+
+# 编辑器 / 助手缓存
+.qoder-credits/
+
+# 页面历史快照（本地留底用，不进仓库）
+index.html.bak-*
+index.html.before-*.html
+*.bak
+*.bak-*
+
+# 排错产物
+*.log
+__pycache__/
+*.pyc
