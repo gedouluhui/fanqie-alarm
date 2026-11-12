@@ -69,4 +69,10 @@
 · `原生玻璃版-说明.md` 里那批玻璃材质的读数与哈希是针对旧 exe 的，本次没动那份文档；
   它自带的 `验收\check_cited_md5.py` 与本轮改动无关（没有引用 FqHost.cs / app.ico 的哈希）。
 
+九、发布
+--------
+源码已推到 `https://github.com/gedouluhui/fanqie-alarm`（`main`）。
+仓库只收源码与验收脚本：`*.exe`、微软的 WebView2 DLL、`.qoder-credits/`、
+`index.html.bak-*` 这些都在 `.gitignore` 里；构建方法写在 README。
+
 2026-11-13
