@@ -1,11 +1,30 @@
 # 番茄闹钟（Fanqie Alarm）
 
+<p>
+<img alt="platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-lightgrey">
+<img alt="runtime" src="https://img.shields.io/badge/runtime-.NET%20Framework%204%20%2B%20WebView2-blue">
+<img alt="network" src="https://img.shields.io/badge/network-none-brightgreen">
+</p>
+
 一个**单文件、纯本机**的番茄钟：界面和逻辑全在一个 `index.html` 里，外面套一层
 WebView2 宿主（C# WinForms）。数据只存在本机 `localStorage`，页面不加载任何远程资源，
 运行时不发一个网络请求。
 
+*A single-file, offline Pomodoro timer for Windows: one HTML page inside a thin WebView2 host.*
+
+![主界面](docs/images/home.webp)
+
 > 学校/自习场景向：严格模式、学霸模式、正向计时、待办集、放弃理由、热力图、高效时段、
 > 白噪音与系统通知。不是又一个网页版番茄钟套壳。
+
+## 适合谁
+
+- 想要一个**不联网、不注册、数据不出本机**的计时器，装完双击就能用。
+- 需要"严格/学霸"这类**逼自己别切走**的强度，而不是只有倒计时。
+- 愿意读代码：全部逻辑在一个 HTML 里，没有构建步骤、没有框架。
+
+不适合：需要跨设备同步、多人自习室、手机端的人（本机版刻意不做这些）。
+
 
 ## 特性
 
@@ -81,3 +100,8 @@ ELECTRON_RUN_AS_NODE=1 <electron.exe> 验收/timing_harness.js index.html after
 
 见 `LICENSE.txt`：可免费用、可整体拷贝给家人朋友；不许改名后冒充原作者发布，不许商业售卖。
 第三方组件（Microsoft Edge WebView2）见 `THIRD_PARTY_NOTICES.txt`。
+
+## 反馈
+
+用出问题或想要某个功能，直接开 [Issue](../../issues)；请带上 Windows 版本、复现步骤，
+崩溃时附上 `%LOCALAPPDATA%\FanqieAlarm\webview2` 下的日志（如果有）。
