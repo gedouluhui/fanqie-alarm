@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -27,6 +30,10 @@ static class FqHost
     [DllImport("user32.dll", SetLastError = true)]
     static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int cx, int cy, uint f);
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("ntdll.dll")] static extern int RtlGetVersion(ref VERSIONINFOEX v);
 
     // OSVERSIONINFOEX 的真实布局：前五个 DWORD，后面全是 WORD/BYTE。
@@ -54,6 +61,7 @@ static class FqHost
     static int cdp = 0;
     static bool taskbar = true, multi = false;
     static int rx = -1, ry = -1, rw = -1, rh = -1;   // 探针用的物理像素落位
+    static string argWarn = "";                      // 非法参数不崩，记下来写进 status
 
     // ex-style 只能走 CreateParams：实测在 HandleCreated 里 SetWindowLong 加
     // WS_EX_NOREDIRECTIONBITMAP，到 Shown 再读就变回 0x10100——WinForms 建柄以后还会按自己的
@@ -98,14 +106,9 @@ static class FqHost
         return 0;
     }
 
-    [STAThread]
-    static void Main(string[] args)
+    // 参数解析独立成方法，才能在没有窗口的测试里直接调用（Main 一跑就要建窗）。
+    static void ParseArgs(string[] args)
     {
-        // 必须先声明 DPI 感知再建任何窗：150% 缩放下不声明的话系统整位图拉伸，
-        // 玻璃边缘会糊成一片，量出来的梯度残留也全废。
-        SetProcessDPIAware();
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
         for (int i = 0; i < args.Length; i++)
         {
             string a = args[i];
@@ -114,17 +117,43 @@ static class FqHost
             else if (a == "--mica") backdrop = 2;
             else if (a == "--no-taskbar") taskbar = false;
             else if (a == "--multi") multi = true;
-            else if (a == "--title" && i + 1 < args.Length) title = args[++i];
+            else if (a == "--title" && i + 1 < args.Length)
+            {
+                string t = args[++i];
+                if (t.Length > 0) title = t;
+            }
             else if (a == "--url" && i + 1 < args.Length) url = args[++i];
             else if (a == "--udf" && i + 1 < args.Length) udf = args[++i];
             else if (a == "--status" && i + 1 < args.Length) statusPath = args[++i];
-            else if (a == "--cdp" && i + 1 < args.Length) cdp = int.Parse(args[++i]);
+            else if (a == "--cdp" && i + 1 < args.Length)
+            {
+                // int.Parse 遇到 "--cdp abc" 会直接抛未捕获异常闪退；探针参数写错
+                // 不该由用户来承担。非法值当作"没带"，并写进 status 方便排查。
+                int p;
+                if (int.TryParse(args[++i], out p) && p > 0 && p <= 65535) cdp = p;
+                else argWarn += "ignored --cdp=" + args[i] + "\n";
+            }
             else if (a == "--rect" && i + 4 < args.Length)
             {
-                rx = int.Parse(args[++i]); ry = int.Parse(args[++i]);
-                rw = int.Parse(args[++i]); rh = int.Parse(args[++i]);
+                int x = 0, y = 0, w = 0, h = 0;
+                bool rectOk = int.TryParse(args[i + 1], out x) && int.TryParse(args[i + 2], out y) &&
+                              int.TryParse(args[i + 3], out w) && int.TryParse(args[i + 4], out h);
+                if (rectOk && w > 0 && h > 0) { rx = x; ry = y; rw = w; rh = h; }
+                else argWarn += "ignored --rect\n";
+                i += 4;
             }
         }
+    }
+
+    [STAThread]
+    static void Main(string[] args)
+    {
+        // 必须先声明 DPI 感知再建任何窗：150% 缩放下不声明的话系统整位图拉伸，
+        // 玻璃边缘会糊成一片，量出来的梯度残留也全废。
+        SetProcessDPIAware();
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        ParseArgs(args);
         if (!multi)
         {
             // csc v4.0.30319 只到 C# 5：`out bool fresh` 这种内联声明编不过，得先声明再 out。
@@ -132,8 +161,18 @@ static class FqHost
             oneShot = new Mutex(true, "FanqieAlarmGlassHost", out fresh);
             if (!fresh)
             {
-                MessageBox.Show("番茄闹钟（玻璃版）已经在运行了。", "番茄闹钟",
-                                MessageBoxButtons.OK, MessageBoxIcon.Information);
+                /* 旧行为只说一句"已经在运行了"就退出：用户明明双击了图标，
+                   屏幕上却什么也没发生（窗口可能最小化、被别的窗盖住、或落在另一块屏）。
+                   现在先把已存在的宿主窗恢复并抬到前台；真找不到才提示。 */
+                IntPtr h = FindWindow(null, title);
+                if (h != IntPtr.Zero)
+                {
+                    ShowWindow(h, 9);          // SW_RESTORE
+                    SetForegroundWindow(h);
+                    return;
+                }
+                MessageBox.Show("番茄闹钟（玻璃版）已经在运行了，但没有找到它的窗口。请从任务栏切换。",
+                                "番茄闹钟", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
         }
@@ -195,6 +234,7 @@ static class FqHost
         }
 
         var log = new System.Text.StringBuilder();
+        if (argWarn.Length > 0) log.Append("args: " + argWarn.Replace("\n", "; ") + "\n");
         log.Append("build=" + build + " glass=" + glass + " backdrop=" + backdrop +
                    " scale=" + scale + " want-rect=" + px + "," + py + "," + pw + "x" + ph +
                    " auto-rect=" + (autoRect ? "clamp" : "explicit") + "\n");
@@ -273,10 +313,17 @@ static class FqHost
                     // CDP 的截图里没有 DWM 那层，所以像素走 BitBlt，CDP 只负责告诉我
                     // "哪块是字、字是什么颜色"。
                     opts = new CoreWebView2EnvironmentOptions();
+                    // 只放行本机这两个调试源。原来的 --remote-allow-origins=* 等于把
+                    // 页面里的任意 Origin 都放进来；探针不需要那么宽。
                     opts.AdditionalBrowserArguments = "--remote-debugging-port=" + cdp +
-                                                      " --remote-allow-origins=*";
+                        " --remote-allow-origins=http://127.0.0.1:" + cdp +
+                        ",http://localhost:" + cdp;
                 }
-                var env = await CoreWebView2Environment.CreateAsync(null, udf, opts);
+                // 便携包可以自带固定版运行时（WebView2Fixed\...\msedgewebview2.exe），
+                // 优先级高于机器上装的 Evergreen；没有就传 null 走系统运行时。
+                string fixedDir = FindFixedRuntime(Path.Combine(exeDir, "WebView2Fixed"));
+                if (fixedDir != null) log.Append("webview2-fixed=" + fixedDir + "\n");
+                var env = await CoreWebView2Environment.CreateAsync(fixedDir, udf, opts);
                 await wv.EnsureCoreWebView2Async(env);
                 var st = wv.CoreWebView2.Settings;
                 st.AreDefaultContextMenusEnabled = false;
@@ -288,12 +335,12 @@ static class FqHost
                 {
                     try
                     {
-                        string m = e3.WebMessageAsJson ?? "";
-                        if (m.Contains("\"theme\""))
+                        string m = e3.WebMessageAsJson;
+                        if (string.IsNullOrEmpty(m)) return;
+                        bool dark;
+                        if (TryReadThemeDark(m, out dark))
                         {
-                            // 不能只 Contains("dark")：浅色消息的键名里也有 dark，
-                            // 结果浅色主题永远被翻成黑标题栏。只认值为 true 的那一条。
-                            int dv = m.Replace(" ", "").Contains("\"dark\":true") ? 1 : 0;
+                            int dv = dark ? 1 : 0;
                             DwmSetWindowAttribute(f.Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dv, 4);
                         }
                     }
@@ -325,8 +372,32 @@ static class FqHost
             {
                 log.Append("webview2=FAIL " + ex.Message + "\n");
                 WriteStatus(log);
-                /* 旧提示指向『启动番茄闹钟.vbs』，而便携包里根本没有这个文件 —— 点开仍然是死路。
-                   现在只指向包里真实存在的安装入口，缺了就说清楚怎么办。 */
+                /* 旧行为只弹一条"去装 WebView2"的死框，然后整个窗口关掉。
+                   先给一条就地可走的路：用本机 Edge 打开同一个页面（应用数据仍然在本机，
+                   只是外壳从 DWM 玻璃换成普通 Edge 窗）。 */
+                DialogResult useEdge = MessageBox.Show(
+                    "WebView2 运行时初始化失败：\n" + ex.Message + "\n\n" +
+                    "要现在改用本机 Microsoft Edge 打开吗？\n" +
+                    "（窗口外壳会变成普通 Edge 窗口，计时、任务和导出/导入照常可用）",
+                    "番茄闹钟", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (useEdge == DialogResult.Yes)
+                {
+                    string fallback = url.Replace("glass=mica", "glass=0")
+                                         .Replace("glass=acrylic", "glass=0");
+                    if (TryOpenInEdge(fallback))
+                    {
+                        log.Append("fallback=edge-ok\n");
+                        WriteStatus(log);
+                        f.Close();
+                        return;
+                    }
+                    /* 降级也失败了才落到安装提示。 */
+                }
+                else
+                {
+                    f.Close();
+                    return;
+                }
                 string urlFile = Path.Combine(exeDir, "缺少WebView2时点此安装.url");
                 string hint = File.Exists(urlFile)
                     ? "双击同目录的『缺少WebView2时点此安装.url』，装好 Evergreen 运行时后再打开。"
@@ -339,6 +410,83 @@ static class FqHost
         };
         Application.Run(f);
         GC.KeepAlive(oneShot);
+    }
+
+    /* 页面发的是 {"t":"theme","dark":true}。旧代码用 Contains 找子串：
+       别的消息里只要出现 "theme" 或 "dark":true 就会误翻标题栏。这里按真 JSON
+       解析，只认 t == "theme" 的对象，且 dark 必须是布尔 true 才翻黑。
+       坏 JSON 一律当"不是主题消息"，不抛到 UI 线程。 */
+    static bool TryReadThemeDark(string json, out bool dark)
+    {
+        dark = false;
+        try
+        {
+            var msg = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
+            object kind, darkVal;
+            if (msg == null || !msg.TryGetValue("t", out kind) ||
+                Convert.ToString(kind) != "theme") return false;
+            dark = msg.TryGetValue("dark", out darkVal) && darkVal is bool && (bool)darkVal;
+            return true;
+        }
+        catch (Exception) { return false; }
+    }
+
+    // 固定版 WebView2 运行时的目录可以是 WebView2Fixed\ 本身，也可以是它下面
+    // 一层版本目录（解压出来的常见形状）。只认真正含 msedgewebview2.exe 的那层。
+    static string FindFixedRuntime(string root)
+    {
+        try
+        {
+            if (!Directory.Exists(root)) return null;
+            if (File.Exists(Path.Combine(root, "msedgewebview2.exe"))) return root;
+            foreach (string sub in Directory.GetDirectories(root))
+                if (File.Exists(Path.Combine(sub, "msedgewebview2.exe"))) return sub;
+        }
+        catch (Exception) { }
+        return null;
+    }
+
+    static string FindEdge()
+    {
+        string pf86 = Environment.GetEnvironmentVariable("ProgramFiles(x86)");
+        string pf = Environment.GetEnvironmentVariable("ProgramFiles");
+        string lad = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string[] cands = new string[]
+        {
+            pf86 == null ? null : Path.Combine(pf86, @"Microsoft\Edge\Application\msedge.exe"),
+            pf == null ? null : Path.Combine(pf, @"Microsoft\Edge\Application\msedge.exe"),
+            Path.Combine(lad, @"Microsoft\Edge\Application\msedge.exe")
+        };
+        foreach (string c in cands)
+            if (c != null && File.Exists(c)) return c;
+        return null;
+    }
+
+    static bool TryOpenInEdge(string target)
+    {
+        try
+        {
+            string edge = FindEdge();
+            if (edge == null)
+            {
+                // 连 Edge 都没有：交给系统默认浏览器。目标本身就是 file:/// URL。
+                var doc = new ProcessStartInfo(target);
+                doc.UseShellExecute = true;
+                Process.Start(doc);
+                return true;
+            }
+            string prof = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "FanqieAlarm", "profile");
+            var psi = new ProcessStartInfo(edge);
+            psi.UseShellExecute = false;
+            psi.Arguments = "--app=\"" + target + "\" --user-data-dir=\"" + prof + "\"" +
+                            " --window-size=520,980 --window-position=700,60" +
+                            " --no-first-run --no-default-browser-check --disable-sync";
+            Process.Start(psi);
+            return true;
+        }
+        catch (Exception) { return false; }
     }
 
     static void WriteStatus(System.Text.StringBuilder log)

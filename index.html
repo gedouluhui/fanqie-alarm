@@ -785,6 +785,11 @@ html[data-theme="dark"] .modal::after,body[data-bg="dusk"] .modal::after,body[da
   transition:opacity .28s var(--ease),transform .34s var(--spring);z-index:90;max-width:84vw;text-align:center;
   background:rgba(24,27,34,.72);backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);
   border:1px solid rgba(255,255,255,.14);box-shadow:var(--shadow-m),inset 0 1px 0 rgba(255,255,255,.2)}
+/* 提示音被系统挂起时的视觉兜底：整窗红色呼吸，不拦点击。5.2 秒后由 JS 摘掉。 */
+#alarmFlash{position:fixed;inset:0;z-index:75;pointer-events:none;opacity:0;
+  background:radial-gradient(120% 120% at 50% 50%,rgba(242,65,58,0) 35%,rgba(242,65,58,.62) 100%)}
+#alarmFlash.on{animation:alarmFlash .52s ease-in-out 8}
+@keyframes alarmFlash{0%,100%{opacity:0}50%{opacity:1}}
 /* 只读横幅：存档由另一个窗口负责时，这个窗口不再写档。玻璃语言跟 #toast 一致。
    贴在滚动容器顶部（sticky）而不是 fixed 悬浮——fixed 那版在 520×600 的矮窗口里会压住
    预设行 49px、"开始专注"11px（shot_dual.py 量出来的），占自己一行才不会盖控件，滚下去也不消失。 */
@@ -1216,6 +1221,8 @@ input[type=range]{height:20px}
      这里连 ::before/::after 一起关掉，并保留 duration 归零而不是删掉 transition，
      这样 JS 依赖的 transitionend/状态切换语义不受影响。 */
   .amb b,.dial::after,.tabbar .live.on,.big{animation:none!important}
+  /* 告警兜底不闪，改成一段静态红色描边：不违反"减少动态"，又不至于毫无视觉提示 */
+  #alarmFlash.on{animation:none!important;opacity:.45}
   *,*::before,*::after{
     animation-duration:.01ms!important;animation-iteration-count:1!important;
     transition-duration:.01ms!important;scroll-behavior:auto!important}
@@ -1614,6 +1621,7 @@ input[type=range]{height:20px}
 <div id="srStatus" class="sr-only" aria-live="polite"></div>
 
 <div id="toast" role="status" aria-live="polite"></div>
+<div id="alarmFlash" aria-hidden="true"></div>
 
 <script>
 "use strict";
@@ -1726,10 +1734,14 @@ function cleanSession(x){
   const h = Number(x.hour);
   const hour = Number.isFinite(h) ? Math.min(23, Math.max(0, h | 0)) : 0;
   const ts = Number.isFinite(Number(x.ts)) ? Number(x.ts) : Date.now();
+  /* 起表时刻要活着过一遍存盘/导入：每次 load() 都会走 cleanSession，旧版这里把它丢掉，
+     跨零点记录重载一次就退回"日期取开始、时间取结束"的错位。老记录没有 startTs ⇒ 退回 ts。 */
+  const startRaw = Number(x.startTs);
+  const startTs = Number.isFinite(startRaw) && startRaw > 0 ? startRaw : ts;
   const day = dayReal(x.day) ? x.day : dayKey(new Date(ts));
   const type = (x.type === "focus" || x.type === "short" || x.type === "long") ? x.type : "focus";
   const status = (x.status === "done" || x.status === "abort") ? x.status : "done";
-  const rec = { id: String(x.id || ("s" + ts)).slice(0, 32), ts, day, hour, type, minutes, status,
+  const rec = { id: String(x.id || ("s" + ts)).slice(0, 32), ts, startTs, day, hour, type, minutes, status,
            reason: typeof x.reason === "string" ? x.reason.slice(0, 30) : null };
   if(typeof x.taskId === "string" && x.taskId) rec.taskId = x.taskId.slice(0, 32);
   if(typeof x.taskTitle === "string" && x.taskTitle) rec.taskTitle = x.taskTitle.slice(0, 120);
@@ -1883,7 +1895,62 @@ function audio(){
   if(!C) return null;
   A.ctx = new C();
   A.master = A.ctx.createGain(); A.master.gain.value = 1; A.master.connect(A.ctx.destination);
+  /* 休眠唤醒、切耳机、渲染进程被冻结后，Chromium 会把上下文挂成 suspended（Safari 是 interrupted）。
+     只靠"第一次点击"那一次 resume 不够：整夜开着窗、中途换输出设备就再没人叫醒它。 */
+  A.ctx.onstatechange = () => {
+    if(!A.ctx) return;
+    const st = A.ctx.state;
+    if(st==="suspended" || st==="interrupted") audioResume();
+  };
   return A.ctx;
+}
+/* resume() 在 Chrome 里返回 Promise；被自动播放策略挡住时是 rejection，不是同步异常。
+   恢复失败本身不算闹钟失败——是否要兜底由 playAlarm 按"该不该响"决定。 */
+function audioResume(){
+  const c = A.ctx;
+  if(!c) return Promise.resolve(false);
+  if(c.state === "running") return Promise.resolve(true);
+  if(typeof c.resume !== "function") return Promise.resolve(false);
+  let p;
+  try{ p = c.resume(); }catch(e){ return Promise.resolve(false); }
+  if(!p || typeof p.then !== "function") return Promise.resolve(c.state === "running");
+  return p.then(()=>c.state === "running", ()=>false);
+}
+/* 手势与回到前台都补一枪；失败就安静地留在原地，不拿 toast 骚扰用户。 */
+function nudgeAudio(){
+  const c = A.ctx;
+  if(!c || c.state === "running") return;
+  return audioResume();
+}
+/* 第一次手势必须走 audio()：自动播放策略只认"用户激活"里创建的上下文。 */
+function wakeAudio(){
+  if(!A.ctx){ audio(); return; }
+  nudgeAudio();
+}
+let alarmFlashTimer = null;
+/* 该响却没响时的兜底：整窗红闪＋toast＋（有权限时）系统通知。
+   用户自己选了 sound=none 或音量 0 是主动静音，不走这里。 */
+function alarmFallback(why){
+  try{
+    const f = $("alarmFlash");
+    if(f){
+      f.classList.remove("on");
+      void f.offsetWidth;               // 连响两次也能重新触发动画
+      f.classList.add("on");
+      clearTimeout(alarmFlashTimer);
+      alarmFlashTimer = setTimeout(()=>f.classList.remove("on"), 5200);
+    }
+  }catch(e){}
+  try{ toast("提示音没能播放，已用红闪和系统通知提醒"+(why?"（"+why+"）":""), 6000); }catch(e){}
+  try{
+    if("Notification" in window && Notification.permission === "granted"){
+      const n = new Notification("番茄闹钟：提示音没有响", {
+        body:"请检查系统音量和输出设备。计时已经结束，记录已保存。",
+        tag:"fanqie-audio-fail", silent:true
+      });
+      setTimeout(()=>{ try{ n.close(); }catch(e){} }, 12000);
+    }
+  }catch(e){}
 }
 function beep(freq, at, dur, gain, type){
   const c=audio(); if(!c) return;
@@ -1895,25 +1962,34 @@ function beep(freq, at, dur, gain, type){
   o.connect(g).connect(A.master); o.start(at); o.stop(at+dur+0.05);
 }
 function playAlarm(){
-  const c=audio(); if(!c) return; const v=(S.settings.vol/100)*0.5; if(v<=0) return;
-  const t=c.currentTime+0.02, k=S.settings.sound;
-  if(k==="none") return;
-  if(k==="bell"){ [ [880,1.6],[1174,1.6] ].forEach(([f,d],i)=>{ beep(f,t+i*0.9,d,v); }); return; }
-  if(k==="soft"){ [[660,.5],[520,.6]].forEach(([f,d],i)=>beep(f,t+i*.42,d,v*0.8)); return; }
-  /* 水晶风铃：三分音在高八度叠一层弱泛音，衰减拉长，听感更"远"而不吵。 */
-  if(k==="chime"){
-    [[1318.5,.3,1],[1568,.24,.7],[1975.5,.2,.5],[2349.3,.16,.36]].forEach(([f,g,d])=>{
-      beep(f,t,d*2.4,v*g); beep(f*2.01,t+0.012,d*1.7,v*g*0.22,'sine');
-    });
-    beep(2637,t+0.1,1.6,v*0.12); return;
-  }
-  /* 电子脉冲：两短一长的方波，像手表报时；方波经主增益后不刺耳，因为音量压到 0.6。 */
-  if(k==="digital"){
-    [[988,0,.12],[988,.17,.12],[1318.5,.34,.3]].forEach(([f,o,d])=>beep(f,t+o,d,v*0.62,'square'));
-    return;
-  }
-  const p=[[1046,0],[1318,.18],[1568,.36],[1046,.72],[1318,.9],[1568,1.08],[1568,1.6]];
-  p.forEach(([f,o])=>beep(f,t+o,.34,v));
+  const k = S.settings.sound;
+  const v = (S.settings.vol/100)*0.5;
+  if(k==="none" || v<=0) return;             // 主动静音不是故障
+  const c = audio();
+  if(!c){ alarmFallback("这个窗口不支持声音"); return; }
+  const fire = () => {
+    if(c.state !== "running"){ alarmFallback("声音输出被系统挂起"); return; }
+    const t=c.currentTime+0.02;
+    if(k==="bell"){ [ [880,1.6],[1174,1.6] ].forEach(([f,d],i)=>{ beep(f,t+i*0.9,d,v); }); return; }
+    if(k==="soft"){ [[660,.5],[520,.6]].forEach(([f,d],i)=>beep(f,t+i*.42,d,v*0.8)); return; }
+    /* 水晶风铃：三分音在高八度叠一层弱泛音，衰减拉长，听感更"远"而不吵。 */
+    if(k==="chime"){
+      [[1318.5,.3,1],[1568,.24,.7],[1975.5,.2,.5],[2349.3,.16,.36]].forEach(([f,g,d])=>{
+        beep(f,t,d*2.4,v*g); beep(f*2.01,t+0.012,d*1.7,v*g*0.22,'sine');
+      });
+      beep(2637,t+0.1,1.6,v*0.12); return;
+    }
+    /* 电子脉冲：两短一长的方波，像手表报时；方波经主增益后不刺耳，因为音量压到 0.6。 */
+    if(k==="digital"){
+      [[988,0,.12],[988,.17,.12],[1318.5,.34,.3]].forEach(([f,o,d])=>beep(f,t+o,d,v*0.62,'square'));
+      return;
+    }
+    const p=[[1046,0],[1318,.18],[1568,.36],[1046,.72],[1318,.9],[1568,1.08],[1568,1.6]];
+    p.forEach(([f,o])=>beep(f,t+o,.34,v));
+  };
+  if(c.state === "running"){ fire(); return; }
+  /* 挂起时先试一次恢复；被自动播放策略拒绝就立刻转视觉/系统通知兜底，不能假装响过。 */
+  audioResume().then(ok=>{ if(ok) fire(); else alarmFallback("浏览器要求先点一下页面才能出声"); });
 }
 /* 噪声缓冲按类型缓存：3 秒 × sampleRate 的样本只生成一次。
    否则拖动音量会走 setNoise(true) 重建整条链路＋重新算 14 万个采样点，主线程会明显卡。 */
@@ -2012,16 +2088,18 @@ function startedAway(){ return !!document.hidden || !document.hasFocus(); }
    盘上真躺着"凌晨 2:34 的 focus 记成 done、只有 2.3 分钟"这种自相矛盾的条目，
    而 0 点前后还有几段 abort/跳过。哪一个是那晚的成因没法事后证明（没留日志），
    但"睡着的那一大段被烧进倒计时"是这几条唯一都能解释的机制，所以这一闸按它修。
-   判据只用"两拍之间隔了多久"，不用墙上钟：可见＋有焦点的窗口里 rAF 逐帧就在挪基准（见 beatOn），
-   要误判得让 rAF 与 200ms 定时器同时停摆一分钟以上。走的是同一本离开账，不开第二本。 */
-const SUSP_GAP_MS = 60000;
+   判据只用"两拍之间隔了多久"，不用墙上钟：rAF 与 200ms 定时器都停摆超过阈值才算。
+   阈值取 90 秒：浏览器把隐藏页的定时器最慢降到约 60 秒一拍，留 1.5 倍余量，
+   否则"切走但没睡"的后台专注会被误判成休眠（普通模式承诺照计）。走的是同一本离开账，不开第二本。 */
+const SUSP_GAP_MS = 90000;
 function beatOn(){ T.beat = mono(); }            // 任何"进程确实还活着"的证据都挪一次基准
 function suspendGuard(){
   if(T.status!=="run" || T.hold) return;                 // 没在跑／停表期间本来就是"没在走"，重置基准由 start·resume·awayEnd 各自负责
   const now = mono();
-  /* 人不在窗口上（隐藏或失焦）：这段的账由 awayStart 那一路管（严格／学霸），普通模式则按界面承诺照计。
-     这里只把基准挪到"这一拍还在"——不挪的话，切回窗口的第一拍会把"隐藏期间照常跑着的节拍"当成整机休眠来退。 */
-  if(document.hidden || !document.hasFocus()){ T.beat = now; return; }
+  /* 这里不再按"隐藏/失焦"提前返回：上一版那句 return 把整机休眠也一起短路了——
+     睡着时窗口照样可见有焦点，但用户合盖前若先切走/最小化，普通模式下 T.hold 为 false，
+     醒来第一拍就被那句改写基准，两小时睡眠直接烧进专注。现在只认"两拍隔了多久"：
+     后台节流约 60 秒一拍 < 90 秒阈值 ⇒ 照常计；真冻住/睡着 ⇒ 超阈值，按离开退账。 */
   const gap = now - T.beat;
   if(!(gap > SUSP_GAP_MS)){ T.beat = now; return; }
   /* 把在场秒数固化到"上一拍还在"的那一刻，再从此刻起表：中间这一大段就此与倒计时无关。 */
@@ -2060,7 +2138,8 @@ function dayReal(s){
   const t = new Date(y, m-1, d);
   return t.getFullYear() === y && t.getMonth() === m-1 && t.getDate() === d;
 }
-/* 落盘／导入过来的分桶表先按形状收口：day 必须是日历日、钟点 0..23、单片不超一小时（一小时桶装不下一小时以上） */
+/* 落盘／导入过来的分桶表先按形状收口：day 必须是日历日、钟点 0..23、
+   单片不超两小时（秋季回拨夜同一小时会出现第二遍，最多 7200 秒；旧的 3600 会静默砍掉一小时） */
 function dlCleanBK(arr){
   const out = [];
   if(!Array.isArray(arr)) return out;
@@ -2068,7 +2147,7 @@ function dlCleanBK(arr){
     if(!it || !Array.isArray(it)) continue;
     const d = String(it[0]), h = Number(it[1])|0, s = Number(it[2]);
     if(!dayReal(d) || !Number.isFinite(s) || s <= 0) continue;
-    out.push([d, Math.min(23, Math.max(0, h)), Math.min(3600, s)]);
+    out.push([d, Math.min(23, Math.max(0, h)), Math.min(7200, s)]);
   }
   return out;
 }
@@ -2286,9 +2365,10 @@ function stopAll(){
 function recordSession(type, minutes, status, reason, split){
   const now=new Date();
   /* 归属看"什么时候开始"：23:50 开始的三小时属于前一天，不该整段算成凌晨那一次。
-     ts 仍是记录时刻（列表按它排序），只有 day/hour 跟着起点走。 */
+     ts 仍是记录时刻（列表按它排序），startTs/day/hour 跟着起点走；
+     CSV 用 startTs 拼日期时间，跨零点记录不再出现"昨晚凌晨"的错觉。 */
   const st = T.swAt>0 ? new Date(T.swAt) : now;
-  const rec = {id:"s"+Date.now()+Math.random().toString(36).slice(2,6), ts:now.getTime(),
+  const rec = {id:"s"+Date.now()+Math.random().toString(36).slice(2,6), ts:now.getTime(), startTs:st.getTime(),
     day:dayKey(st), hour:st.getHours(), type, minutes:Math.round(Math.max(0,minutes)*10)/10, status, reason:reason||null};
   /* 任务归属：这一版之后完成的专注会记下任务名，统计页的"任务投入"与最近记录都靠它。
      任务后来被删掉也不影响历史记录（标题已经拷进记录里）。 */
@@ -3214,7 +3294,7 @@ function renderStats(){
         + `<div class="it" title="${esc(r.t.title)}">${esc(r.t.title)}</div>`
         + `<div class="itrack"><i class="ifill" style="width:${Math.max(2,r.v/im*100).toFixed(1)}%"></i></div></div>`
         + `<div class="iv">${r.est?"≈":""}${Math.round(r.v)}′ · ${r.t.donePomo||0}🍅</div></div>`).join("")
-        + (note?`<div class="lempty">${note}</div>`:"");
+        + (note?`<div class="lempty">${esc(note)}</div>`:"");
     }
   }
 
@@ -3234,7 +3314,7 @@ function renderStats(){
       const mv = mins<10 ? (Math.round(mins*10)/10) : Math.round(mins);
       return `<div class="ri"><span class="dot ${rest?"rest":""} ${ab?"abort":""}"></span>`
         + `<div class="rt"><div class="rn" title="${esc(name)}">${esc(name)}</div>`
-        + `<div class="rm">${mm}/${dd} ${hh}:${mi} · ${status}</div></div>`
+        + `<div class="rm">${mm}/${dd} ${hh}:${mi} · ${esc(status)}</div></div>`
         + `<span class="rv">${mv}′</span>`
         + `<button type="button" class="rx" data-del="${esc(x.id)}" aria-label="删除这条记录" title="删除这条记录">`
         + `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.5 4.5h9M6 4.5V3.2h4v1.3M4.6 4.5l.5 8.2h5.8l.5-8.2"/></svg></button></div>`;
@@ -3991,18 +4071,23 @@ $("meName").onclick=async ()=>{
   $("meNameText").textContent=S.settings.name; renderHeader(); toast("昵称已更新");
 };
 function csvCell(v){
-  let s=String(v==null?"":v);
+  let s=String(v==null?"":v).replace(/\0/g,"");
   /* CSV 注入：任务名/理由以 = + - @ 开头时，Excel/WPS 会当公式执行（能外联、能跑命令）。
      按 OWASP 的建议一律加前导单引号，让表格软件按文本读；本文件的数字列只有分钟数，
-     由 Math.round 生成，不会被这条规则波及。 */
-  if(/^[=+\-@\t\r]/.test(s)) s="'"+s;
+     由 Math.round 生成，不会被这条规则波及。
+     两处加固：① NUL 先剔除——部分导入器会在 NUL 处截断单元格，前半截当文本、后半截照样当公式；
+     ② 公式判据允许前导空白/不间断空格——有些表格软件会先剥空白再解析，`" =cmd|..."` 这种能绕过旧正则。 */
+  if(/^[\s\u00A0]*[=+\-@]|^[\t\r]/.test(s)) s="'"+s;
   return /[",\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
 }
 $("btnCsv").onclick=()=>{
   const rows=[["日期","时间","类型","状态","分钟","任务","理由","跨零点分账"]];
   const list=S.sessions.slice().sort((a,b)=>(Number(a.ts)||0)-(Number(b.ts)||0));
   for(const x of list){
-    const d=new Date(Number(x.ts)||Date.now());
+    /* 跨零点记录：day/hour 记的是起表时刻，CSV 的日期/时间也必须同源；
+       拿 ts（结束时刻）会拼出 "2026-11-12, 00:20" 这种"昨晚凌晨"的错觉。
+       老记录没有 startTs ⇒ 退回 ts，行为与旧版一致；系统钟往回拨时也仍按起表时刻出。 */
+    const d=new Date(Number(x.startTs)||Number(x.ts)||Date.now());
     const day=x.day||dayKey(d);
     const hh=String(d.getHours()).padStart(2,"0"), mi=String(d.getMinutes()).padStart(2,"0");
     const sp = dlCleanSplit(x.split, x.minutes);
@@ -4068,7 +4153,11 @@ document.addEventListener("keydown",e=>{
   else if(/^[1-5]$/.test(e.key)){ e.preventDefault(); go(["todo","set","timer","stat","me"][+e.key-1]); }
 });
 window.addEventListener("beforeunload",e=>{ if(T.status==="run"&&T.kind==="focus"&&S.settings.mode!=="normal"){ e.preventDefault(); e.returnValue="专注还在进行，确定离开？"; } });
-document.addEventListener("click",()=>{ const c=audio(); if(c&&c.state==="suspended") c.resume(); }, {once:true});
+/* 音频上下文可能在休眠/换设备后挂起：每次真实手势都试一次恢复，
+   第一次手势还负责把上下文建在"用户激活"里（自动播放策略）。 */
+["pointerdown","keydown","touchstart"].forEach(ev=>document.addEventListener(ev, wakeAudio, {passive:true}));
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden) nudgeAudio(); });
+window.addEventListener("pageshow", nudgeAudio);
 
 /* ---------------- 开机 ---------------- */
 applyTheme(); applySettingsToUI(); applyZoom(); renderFontSeg(); setMotion();

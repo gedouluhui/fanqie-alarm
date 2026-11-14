@@ -19,8 +19,11 @@ SRC="${2:-$HERE/FqHost.cs}"
 CSC='C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 w() { cygpath -w "$1" 2>/dev/null || echo "$1"; }
 mkdir -p "$OUT_DIR"
-cp -f "$HERE/Microsoft.Web.WebView2.Core.dll" "$HERE/Microsoft.Web.WebView2.WinForms.dll" \
-      "$HERE/WebView2Loader.dll" "$OUT_DIR/"
+# 就地重编（OUT_DIR == HERE）时源和目标是同一个文件，cp 会以 "are the same file"
+# 返回非 0，set -e 于是在编译前就把脚本打断——复现入口自己跑不通。逐个用 -ef 判同。
+for f in Microsoft.Web.WebView2.Core.dll Microsoft.Web.WebView2.WinForms.dll WebView2Loader.dll; do
+  if [ ! "$HERE/$f" -ef "$OUT_DIR/$f" ]; then cp -f "$HERE/$f" "$OUT_DIR/"; fi
+done
 "$CSC" -nologo -target:winexe "-out:$(w "$OUT_DIR/FqGlass.exe")" \
   "-r:$(w "$HERE/Microsoft.Web.WebView2.Core.dll")" \
   "-r:$(w "$HERE/Microsoft.Web.WebView2.WinForms.dll")" \

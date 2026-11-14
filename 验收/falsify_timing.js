@@ -103,11 +103,11 @@ const MUTS = [
   ["M39 学霸模式不中断（学霸的‘离开即中断’被悄悄放宽）",
    "if(S.settings.mode===\"xueba\"){ abort(\"整机休眠／进程被挂起（学霸模式）\", gap); return; }",
    "if(S.settings.mode===\"xueba\"){ return; }"],
-  ["M40 隐藏／失焦那道 early return 被摘（隐藏期间照常跑的节拍被当成休眠来退）",
-   "  if(document.hidden || !document.hasFocus()){ T.beat = now; return; }", ""],
-  ["M41 隐藏分支只 return 不挪基准（回来第一拍到的是整个隐藏期＝A31 该红）",
-   "  if(document.hidden || !document.hasFocus()){ T.beat = now; return; }",
-   "  if(document.hidden || !document.hasFocus()) return;"],
+  ["M40 隐藏／失焦早退又被加回来（普通模式的后台休眠扣减被整条短路；锚点全部原样在）",
+   "  const gap = now - T.beat;",
+   "  if(document.hidden || !document.hasFocus()){ T.beat = now; return; }\n  const gap = now - T.beat;"],
+  ["M41 阈值抬到 120 秒（91 秒的冻结被漏判成正常节流＝A30b 该红）",
+   "const SUSP_GAP_MS = 90000;", "const SUSP_GAP_MS = 120000;"],
   ["M42 start 不刷新休眠基准（沙箱起跑即 start，两拍之差只有 1.2 秒 ⇒ 结构上判不到）",
    "T.status=\"run\"; T.startAt=mono(); T.acc=0; T.awayTotal=0; T.awayAt=0; T.hold=false;\n  beatOn();",
    "T.status=\"run\"; T.startAt=mono(); T.acc=0; T.awayTotal=0; T.awayAt=0; T.hold=false;",
@@ -121,9 +121,9 @@ const MUTS = [
   /* M44／M45：M33 改的是那句比较本身，锚点先挡（弱一档）。这两条只动阈值那个常数——
      锚点一个都不碰，两个方向都得真值表自己点名，否则"永不休眠"与"每拍都在休眠"这两种错就没人管。 */
   ["M44 休眠阈值抬到永不触发（锚点全在，判据却再也够不着）",
-   "const SUSP_GAP_MS = 60000;", "const SUSP_GAP_MS = Number.MAX_SAFE_INTEGER;"],
+   "const SUSP_GAP_MS = 90000;", "const SUSP_GAP_MS = Number.MAX_SAFE_INTEGER;"],
   ["M45 休眠阈值降到 0（每一拍都当刚睡醒＝正常跑满也被退账）",
-   "const SUSP_GAP_MS = 60000;", "const SUSP_GAP_MS = 0;"],
+   "const SUSP_GAP_MS = 90000;", "const SUSP_GAP_MS = 0;"],
   /* M46–M56：跨午夜分桶账（2026-10-16 这一轮）。分工与前面一致——
      "整句删除"那类会被形状闸门先挡，所以每条都另配一版"锚点字节原样在、行为破掉"的注入（shadow／换常数），
      让真值表自己点名；点名不到的（结构上够不着）宁可不登记，也不要拿一条永不报警的变异凑数。 */

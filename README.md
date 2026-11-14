@@ -74,17 +74,26 @@ bash native/build_ship.sh              # 交付件 -> native/dist/番茄闹钟.e
 ## 验收
 
 ```bash
-# 12 项页面功能回归（起一个 WebView2 窗口，走 CDP）
+# 页面功能回归（起一个 WebView2 窗口，走 CDP；不想弹窗时跳过这条）
 python 验收/page_regress.py
 
-# 41 行计时真值表（从 index.html 现盘切真代码跑，锚点缺失直接 rc=3）
-# 需要一个 Electron 二进制当 Node 用：VS Code / Qoder / Electron 发行包里的 exe 都行
-ELECTRON_RUN_AS_NODE=1 "<path-to>\Code.exe" 验收/timing_harness.js index.html after
+# 42 行计时真值表（从 index.html 现盘切真代码跑，锚点缺失直接 rc=3）
+# 有 Node 就直接跑；没有 Node 时可用 Electron 二进制当 Node 用
+node 验收/timing_harness.js index.html after
+node 验收/falsify_timing.js              # 62 支内存变异，逐个要求被点名
+
+# 安全与存储加固：26 条已知答案；--selftest 再验 8 支变异
+node 验收/test_hardening.js
+node 验收/test_hardening.js --selftest
+
+# 提示音恢复与告警兜底：23 条已知答案；--selftest 再验 7 支变异
+node 验收/test_audio_guard.js
+node 验收/test_audio_guard.js --selftest
 ```
 
-两条门禁都不碰真机数据：`page_regress.py` 起的是独立窗口、临时 profile；真值表的时钟是注入的假时钟。
-
-当前状态：`PAGE-REG ALL-OK`（12/12）、`真值表 41 行，红 0 行`。
+所有门禁都不碰真机数据：`page_regress.py` 起的是独立窗口、临时 profile；
+真值表和内存变异用注入的假时钟，音频套件用假 `AudioContext`，不会真出声。
+每套都自带 PASS/FAIL 与已知答案自检，以当场输出为准。
 
 ## 数据在哪
 

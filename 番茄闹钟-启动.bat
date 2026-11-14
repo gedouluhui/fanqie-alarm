@@ -1,16 +1,40 @@
 @echo off
+chcp 936 >nul 2>&1
 rem ============================================================
-rem ç•ªèŒ„é—¹é’Ÿ - å¯åŠ¨å™¨ï¼ˆæ§åˆ¶å°å…œåº•ç‰ˆï¼Œå‡ºé—®é¢˜æ—¶çœ‹è¿™é‡Œï¼‰
-rem æ—¥å¸¸ä½¿ç”¨è¯·åŒå‡»æ¡Œé¢çš„"ç•ªèŒ„é—¹é’Ÿ"å›¾æ ‡ï¼ˆç­‰ä»·äº å¯åŠ¨ç•ªèŒ„é—¹é’Ÿ.vbsï¼Œæ— é»‘çª—å£ï¼‰ã€‚
-rem æœ¬æ–‡ä»¶ä¸ vbs å‚æ•°å®Œå…¨ä¸€è‡´ï¼Œåªæ˜¯æ§åˆ¶å°å¯è§ï¼Œä¾¿äºæ’æŸ¥ã€‚
-rem æ³¨æ„ï¼šå¿…é¡»å¸¦ç‹¬ç«‹ --user-data-dirï¼Œå¦åˆ™çª—å£å°ºå¯¸å‚æ•°ä¼šè¢«
-rem       å·²ç»åœ¨è¿è¡Œçš„ Edge ä¸»è¿›ç¨‹å¿½ç•¥ï¼ˆå®æµ‹ä¼šå¼€æˆ 1265x1372ï¼‰ã€‚
+rem ·¬ÇÑÄÖÖÓ - Æô¶¯Æ÷£¨¿ØÖÆÌ¨¶µµ×°æ£¬³öÎÊÌâÊ±¿´ÕâÀï£©
+rem ÈÕ³£Ê¹ÓÃÇëË«»÷ Æô¶¯·¬ÇÑÄÖÖÓ.vbs£¨ÎŞºÚ´°¿Ú£©¡£
+rem ±¾ÎÄ¼şÓë vbs ²ÎÊıÒ»ÖÂ£¬Ö»ÊÇ¿ØÖÆÌ¨¿É¼û£¬±ãÓÚÅÅ²é¡£
+rem Â·¾¶È«²¿Ïà¶Ô±¾ÎÄ¼ş£ºÕû¸öÎÄ¼ş¼Ğ¿ÉÒÔ°á×ß¡¢¸ÄÃû¡¢·Åµ½º¬¿Õ¸ñ»òÖĞÎÄµÄÄ¿Â¼¡£
+rem ×¢Òâ£º±ØĞë´ø¶ÀÁ¢ --user-data-dir£¬·ñÔò´°¿Ú³ß´ç²ÎÊı»á±»
+rem       ÒÑ¾­ÔÚÔËĞĞµÄ Edge Ö÷½ø³ÌºöÂÔ£¨Êµ²â»á¿ª³É 1265x1372£©¡£
+rem Edge µÄ --app ²»ÈÏÎ´±àÂëµÄÖĞÎÄ/¿Õ¸ñÎÄ¼ş URL£¨»á¾²Ä¬¿ª³ÉĞÂ±êÇ©Ò³£©£¬
+rem ËùÒÔÕâÀïÓÃ PowerShell µÄ [uri]::new(...).AbsoluteUri ×ö UTF-8 °Ù·ÖºÅ±àÂë¡£
 rem ============================================================
-chcp 65001 >nul 2>&1
-if not exist "C:\Users\lyj20\Desktop\èµ›åšé¸¡è›‹\fanqie-todo\index.html" (
-  echo [é”™è¯¯] æœªæ‰¾åˆ° index.html
+setlocal
+set "D=%~dp0"
+if not exist "%D%index.html" (
+  echo [´íÎó] Î´ÕÒµ½ index.html: "%D%index.html"
   pause
   exit /b 1
 )
-start "" "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --app="file:///C:/Users/lyj20/Desktop/%%E8%%B5%%9B%%E5%%8D%%9A%%E9%%B8%%A1%%E8%%9B%%8B/fanqie-todo/index.html" --user-data-dir="%LOCALAPPDATA%\FanqieAlarm\profile" --window-size=520,980 --window-position=700,60 --no-first-run --no-default-browser-check --disable-sync
+
+set "EDGE=%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"
+if not exist "%EDGE%" set "EDGE=%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"
+if not exist "%EDGE%" set "EDGE=%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"
+if not exist "%EDGE%" (
+  echo [ÌáÊ¾] Î´ÕÒµ½ Microsoft Edge£¬¸ÄÓÃÏµÍ³Ä¬ÈÏä¯ÀÀÆ÷´ò¿ª¡£
+  start "" "%D%index.html"
+  exit /b 0
+)
+
+set "FQ_PAGE=%D%index.html"
+set "U="
+for /f "usebackq delims=" %%U in (`powershell -NoProfile -NonInteractive -Command "[uri]::new($env:FQ_PAGE).AbsoluteUri"`) do set "U=%%U"
+if not defined U (
+  echo [ÌáÊ¾] ÎŞ·¨Éú³É±¾µØÎÄ¼ş URL£¬¸ÄÓÃÏµÍ³Ä¬ÈÏä¯ÀÀÆ÷´ò¿ª¡£
+  start "" "%D%index.html"
+  exit /b 0
+)
+
+start "" "%EDGE%" --app="%U%" --user-data-dir="%LOCALAPPDATA%\FanqieAlarm\profile" --window-size=520,980 --window-position=700,60 --no-first-run --no-default-browser-check --disable-sync
 exit /b 0

@@ -45,12 +45,15 @@ bash native/build_ship.sh                 # release exe with icon -> native/dist
 ## Verification
 
 ```bash
-python 验收/page_regress.py                                   # 12 page-level checks over CDP
-ELECTRON_RUN_AS_NODE=1 "<path-to>\\Code.exe" 验收/timing_harness.js index.html after
-                                                              # 41-row timing truth table, cut from the live file
+python 验收/page_regress.py                    # page-level checks over CDP; opens a real window
+node 验收/timing_harness.js index.html after   # 42-row timing truth table, cut from the live file
+node 验收/falsify_timing.js                    # 62 in-memory mutations, each must be named on failure
+node 验收/test_hardening.js && node 验收/test_hardening.js --selftest    # 26 checks + 8 mutations
+node 验收/test_audio_guard.js && node 验收/test_audio_guard.js --selftest  # 23 checks + 7 mutations
 ```
 
-Current state: `PAGE-REG ALL-OK` (12/12), truth table 41 rows / 0 red.
+All gates use throw-away profiles and injected clocks; the audio suite uses a fake `AudioContext`,
+so it never plays a sound. Each suite prints its own PASS/FAIL and known-answer self-test.
 
 ## Where data lives
 
