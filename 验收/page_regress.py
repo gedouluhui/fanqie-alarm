@@ -156,10 +156,10 @@ os.makedirs(os.path.dirname(status), exist_ok=True)
 if os.path.exists(status): os.remove(status)
 # 每次跑都用一份干净的 WebView2 user-data-dir：上一轮 FqGlass 遗留在 %LOCALAPPDATA%\FanqieAlarm\webview2
 # 里的"记录者"键会让这一轮走 dualReadOnly，save() 静默不写；这条测试本身也依赖"我说了算"。
-UDF = os.path.join(os.environ["LOCALAPPDATA"], "fq-glass-reg-udf")
-for _ in range(6):
-    if not os.path.isdir(UDF): break
-    shutil.rmtree(UDF, ignore_errors=True); time.sleep(0.4)
+# 每次用一个新的 user-data-dir：不依赖"删旧目录"这件可能被策略拦下的事，
+# 也就不会因为删不掉上一轮而误判成"页面回归失败"。
+UDF = os.path.join(os.environ["LOCALAPPDATA"],
+                   "fq-glass-reg-%d-%d" % (os.getpid(), int(time.time())))
 
 before = set(find(TITLE))
 p = subprocess.Popen([EXE, "--none", "--multi", "--no-taskbar", "--title", TITLE,

@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 存储事务（76 例）
+        run: node 验收/test_storage_transactions.js
+
+      - name: 时序与 CSV 真值表（26 例）
+        run: node 验收/test_hardening.js
+
+      - name: 计时证伪器（62 条登记变异，未预定的漏网必须为 0）
+        run: node 验收/falsify_timing.js index.html

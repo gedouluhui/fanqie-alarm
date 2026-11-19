@@ -18,8 +18,8 @@ MUTS = [
                          "function addTask(){ if(1) return;", 1)),
     # M2: 让 save() 变空操作 ⇒ task-persist 红（localStorage 里没有新任务 id）
     ("M2 save 空转",
-     lambda s: s.replace("try{ localStorage.setItem(STORE_KEY, JSON.stringify(S)); }",
-                         "try{ void 0; }", 1)),
+     lambda s: s.replace("localStorage.setItem(STORE_KEY, raw);",
+                         "void raw;", 1)),
     # M3: stats() 每次真重算 ⇒ stats-cached-identity 红（identity 不成立）
     ("M3 stats 无缓存",
      lambda s: s.replace("function stats(){\n",
@@ -31,6 +31,22 @@ MUTS = [
     # M5: 把 --veil-rgb 从 :root 里删掉 ⇒ veil-token-defined 红
     ("M5 帽子令牌被删",
      lambda s: s.replace("  --veil-rgb:232,236,243; --veil-a:.55;", "  ", 1)),
+    # M6: 暗色主题整段改名 ⇒ theme-toggle-ok 红（切到 dark 后 --text 不变）
+    ("M6 暗色主题失效",
+     lambda s: s.replace('html[data-theme="dark"]{', 'html[data-theme="dark-x"]{', 1)),
+    # M7: statsDirty 空转 ⇒ stats-dirty-rebuilds 红
+    ("M7 统计脏标记空转",
+     lambda s: s.replace("function statsDirty(){ _stCache = null; _stDomDirty = true; scheduleWarm(); }",
+                         "function statsDirty(){ }", 1)),
+    # M8: 表盘弧改 id ⇒ arc-dasharray 红（取不到 #arc）
+    ("M8 表盘弧改名",
+     lambda s: s.replace('<circle class="bar" id="arc"', '<circle class="bar" id="arcX"', 1)),
+    # M9: 新增任务不入列 ⇒ task-add 红
+    ("M9 新任务不入列",
+     lambda s: s.replace("  S.tasks.push(t);", "  void t;", 1)),
+    # M10: 写到另一个存储键 ⇒ task-persist 红（产品键里查不到新 id）
+    ("M10 存到错键",
+     lambda s: s.replace('localStorage.setItem(STORE_KEY,', 'localStorage.setItem(STORE_KEY+"_x",', 1)),
 ]
 
 
