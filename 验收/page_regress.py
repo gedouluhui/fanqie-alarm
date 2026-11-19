@@ -134,6 +134,13 @@ CASES = [
      "(()=>{const el=document.querySelector('.dial')||document.body;"
      "return typeof el.onkeydown==='function' || (window.addEventListener && true);})()",
      lambda v: v is True),
+    # (9) 宽窗适配：780px 视口下画布要真的用上宽度，而不是永远 560px
+    # 画布必须用满窗口（上限 920）。窄窗口时等于窗口宽，宽窗口时等于 920；
+    # 没有这条规则时宽窗只会给 560，两侧留白 ⇒ 这里会低于 min(920, 窗口宽)。
+    ("wide-uses-window",
+     "(()=>{const w=Math.round(document.getElementById('app').getBoundingClientRect().width);"
+     "return w - Math.min(920, window.innerWidth);})()",
+     lambda v: isinstance(v, (int, float)) and -2 <= v <= 0),
     # (8) 对话框开关（modal 语义）
     ("modal-toggle",
      "(()=>{const b=document.querySelector('[data-open=settings],#btnSettings,button[aria-controls]');"
@@ -165,7 +172,7 @@ before = set(find(TITLE))
 p = subprocess.Popen([EXE, "--none", "--multi", "--no-taskbar", "--title", TITLE,
                       "--url", PAGE,   # 注意：无 ?glass= ⇒ 页面走"实心墙"分支，等价 Edge 版
                       "--udf", UDF,
-                      "--rect", "1152", "259", "780", "1470",
+                      "--rect", "1152", "259", os.environ.get("FQREG_WIDTH", "780"), "1470",
                       "--status", status, "--cdp", str(PORT)])
 h = 0
 for _ in range(40):

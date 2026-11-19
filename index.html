@@ -214,6 +214,14 @@ body[data-motion="paused"] .tabbar .live.on{animation-play-state:paused}
 @media (min-width:760px){
   #app{box-shadow:0 0 0 1px var(--hair),0 24px 80px rgba(0,0,0,.14)}
 }
+/* 宽窗适配：560px 的专注器在 900px 级窗口里两侧全是空白。
+   超过 700px 就把画布放宽，并把待办列表排成两列，宽窗不再是"放大版的窄窗"。 */
+@media (min-width:700px){
+  #app{max-width:920px}
+  #taskList{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+            gap:10px;align-items:start;align-content:start}
+  #taskList > *{min-width:0}
+}
 
 /* ---------- 顶栏 ---------- */
 .topbar{display:flex;align-items:center;justify-content:space-between;padding:15px 20px 6px;flex:0 0 auto}
