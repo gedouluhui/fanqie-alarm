@@ -90,10 +90,18 @@ function csvCellCheck(src) {
 
 /* ---------------- 3. recordSession 必须记下起表墙上时刻 ---------------- */
 function recordStartTsCheck(src) {
-  const fn = functionText(src, "function recordSession(");
+  // 记录草稿与实际记账共用产品实现；旧版无草稿函数时仍验证旧实现。
+  const draft = src.includes("function sessionDraft(") ? functionText(src, "function sessionDraft(") : "";
+  const transaction=src.includes("function settleSession(")
+    ? sliceTo(src,"const RECEIPT_CAP =","function mergeSave(","累计凭据") + "\n" +
+      sliceTo(src,"function newSessionId()","function sessionDraft(","稳定身份") + "\n" +
+      sliceTo(src,"const CAP =","const NUM_RANGE", "窗口容量") + "\n" +
+      functionText(src,"function cleanSession(") + "\n" + functionText(src,"function cleanTask(") + "\n" +
+      functionText(src,"function dayReal(") + "\nconst uncommittedSessions=new Map();\n" : "";
+  const fn = transaction + draft + "\n" + functionText(src, "function recordSession(");
   const now = new Date(2026, 10, 13, 0, 20, 0).getTime();
   const swAt = new Date(2026, 10, 12, 23, 50, 0).getTime();
-  const S = { sessions: [] };
+  const S = { sessions: [], tasks: [], handoffReceipts: [] };
   const T = { swAt };
   const recordSession = new Function("S", "T", "activeTask", "dayKey", "dlCleanSplit", "statsDirty", "Date",
     fn + "\nreturn recordSession;")(S, T, () => null, dayKeyOf, () => null, () => {}, Date);

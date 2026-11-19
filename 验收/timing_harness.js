@@ -77,6 +77,8 @@ function cut(SRC, a, b, why){
 }
 function extract(SRC){
   return {
+    // 新事务内核依赖稳定身份/receipt/真实 save；不能再用空 save 假装结算已提交。
+    STORAGE: SRC.includes("function settleSession(") ? cut(SRC, "const STORE_KEY =", "/* ---------------- 音频", "存储事务") : "",
     KERNEL: cut(SRC, "const mono = () =>", "/* 进行中的那一段单独落盘", "计时内核"),
     CTRL: cut(SRC, "function start(kind){", "/* ---------------- DOM 小工具", "状态机与记账"),
     /* AWAY 连"离开"那两个函数和挂着它们的三个监听器一起切出来：
@@ -118,7 +120,8 @@ const perf = { now: () => CLK };
 const HANDLERS = {};
 const win = { performance: perf, addEventListener: (t, f) => { (HANDLERS[t] = HANDLERS[t] || []).push(f); } };
 /* hasFocus 跟着 hidden 走：真窗口"看不见"时必然也没焦点，反向不成立（可见但失焦要单独建模用 cfg.blur0）。 */
-const doc = { hidden: false, hasFocus: () => !doc.hidden, addEventListener: (t, f) => { (HANDLERS[t] = HANDLERS[t] || []).push(f); } };
+const doc = { hidden: false, hasFocus: () => !doc.hidden, getElementById: id => el(id),
+  addEventListener: (t, f) => { (HANDLERS[t] = HANDLERS[t] || []).push(f); } };
 function fire(name){ for(const f of (HANDLERS[name] || [])) f({}); }
 /* 两条路分开走，别混成一次：alt-tab 只发 window blur/focus（页面还看得见）；
    最小化/切标签才发 visibilitychange。合成一条会互相顶掉——两条路各有一行真值表钉着。 */
@@ -134,7 +137,7 @@ function el(id){
   const n = { id, textContent:"", innerHTML:"", value:"", style:{}, title:"", dataset:{}, disabled:false, onclick:null,
     classList:{ add(){}, remove(){}, toggle(){}, contains(){ return false; } },
     querySelectorAll(){ return []; }, querySelector(){ return null; }, setAttribute(){}, getAttribute(){ return null; },
-    appendChild(){}, focus(){}, click(){} };
+    appendChild(){}, focus(){}, click(){}, addEventListener(){} };
   NODES.set(id, n); return n;
 }
 
@@ -149,9 +152,10 @@ function makeWorld(parts, cfg){
   const S = { settings:Object.assign({focus:25, short:5, long:15, every:4, autoNext:false, mode:"normal", timing:"count",
                          away:15, allowPause:true, dark:false, simple:false}, cfg || {}),
               sessions:[], tasks:[], collections:[], cycle:0, activeTaskId:null, notes:[] };
-  const body = parts.KERNEL + "\n" + parts.CTRL + "\n" + parts.AWAY + "\n" + parts.WIRE + "\n" +
-    parts.CLEAN + "\n" + parts.STATS + "\n" +
-    'return {T, S, secsFor, usedSec, awayNowSec, focusSec, recordSec, remainSec, progress, ' +
+  const storageInit=parts.STORAGE ? parts.STORAGE + '\nS.settings=Object.assign(S.settings,'+JSON.stringify(S.settings)+'); claimOwner();\n' : '';
+  const body = storageInit + parts.KERNEL + "\n" + parts.CTRL + "\n" + parts.AWAY + "\n" + parts.WIRE + "\n" +
+    (parts.STORAGE ? "" : parts.CLEAN) + "\n" + parts.STATS + "\n" +
+    'return {T, get S(){return S;}, secsFor, usedSec, awayNowSec, focusSec, recordSec, remainSec, progress, ' +
     'checkDone:(typeof checkDone!=="undefined"?checkDone:null), ' +
     'suspendGuard:(typeof suspendGuard!=="undefined"?suspendGuard:null), beatOn:(typeof beatOn!=="undefined"?beatOn:null), ' +
     'skipFocusRecord:(typeof skipFocusRecord!=="undefined"?skipFocusRecord:null), startedAway:(typeof startedAway!=="undefined"?startedAway:null), ' +
@@ -172,6 +176,15 @@ function makeWorld(parts, cfg){
                 dayKeyOf,
                 () => ({pomos:0}), () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {},
                 (x) => String(x), (x) => x];
+  if(parts.STORAGE){
+    const defined=new Set(["S","save","storageOK","dualReadOnly","dayKey","esc","clone"]);
+    for(let i=names.length-1;i>=0;i--) if(defined.has(names[i])){ names.splice(i,1); vals.splice(i,1); }
+    const data=new Map();
+    names.push("localStorage","setTimeout","clearTimeout","setInterval","clearInterval");
+    vals.push({get length(){return data.size;},key:i=>[...data.keys()][i]??null,
+      getItem:k=>data.get(k)??null,setItem:(k,v)=>data.set(k,String(v)),removeItem:k=>data.delete(k)},
+      ()=>0,()=>{},()=>0,()=>{});
+  }
   return new Function(...names, body)(...vals);
 }
 

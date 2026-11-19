@@ -1641,7 +1641,7 @@ const DEF = {
             dark:false, simple:false, font:"m", motto:"你现在专注的样子，比谁都好看。",
             goal:120, name:"学习的人", notify:false},
   collections:[{id:"c1",name:"默认"},{id:"c2",name:"专业课"},{id:"c3",name:"英语"}],
-  tasks:[], activeTaskId:null, sessions:[], cycle:0, lastGoalDay:""
+  tasks:[], activeTaskId:null, sessions:[], handoffReceipts:[], cycle:0, lastGoalDay:""
 };
 const ACCENTS = {f2413a:"#f2413a", fa5151:"#fa5151", ff7043:"#ff7043", e0563d:"#e0563d",
                  "2f80ed":"#2f80ed", "27ae60":"#27ae60", "8e44ad":"#8e44ad", "111111":"#111111",
@@ -1768,15 +1768,93 @@ function cleanTask(t){
     focusMin:Math.max(0, Math.round((Number(t.focusMin)||0)*10)/10),
     createdAt:Number.isFinite(+t.createdAt) ? +t.createdAt : now };
 }
+/* receipt 是累计入账凭据，不是 sessions 的缓存：窗口截断后仍须保留。
+   超过容量明确拒绝，不淘汰任何已应用 ID；旧 ver2 没有此字段时从全部记录迁移。 */
+const RECEIPT_CAP = 50000;
+function receiptFor(rec){
+  return {id:rec.id, minutes:rec.minutes, type:rec.type, startTs:rec.startTs,
+    taskId:rec.taskId||"", done:rec.type==="focus" && rec.status==="done"};
+}
+function sameSegment(a,b){
+  return a.type===b.type && a.startTs===b.startTs && (a.taskId||"")===(b.taskId||"");
+}
+function receiptCovers(a,rec){
+  return !!a && sameSegment(a,rec) && a.minutes>=rec.minutes &&
+    (rec.type!=="focus" || rec.status!=="done" || a.done);
+}
+function receiptIndex(list){
+  if(list==null) return new Map();
+  if(!Array.isArray(list) || list.length>RECEIPT_CAP) throw new Error("交接凭据超出容量或格式无效");
+  const map=new Map();
+  for(const x of list){
+    if(!x || typeof x.id!=="string" || !x.id || x.id.length>32 ||
+      !Number.isFinite(x.minutes) || x.minutes<0 || x.minutes>1440 ||
+      !["focus","short","long"].includes(x.type) || !Number.isFinite(x.startTs) || x.startTs<=0 ||
+      typeof x.taskId!=="string" || x.taskId.length>32 || typeof x.done!=="boolean")
+      throw new Error("交接凭据格式无效，不能丢弃后继续恢复");
+    const old=map.get(x.id);
+    if(old && !sameSegment(old,x)) throw new Error("同一记录 ID 的归属冲突，需核查原数据");
+    map.set(x.id,{id:x.id,minutes:Math.max(old?.minutes||0,x.minutes),type:x.type,
+      startTs:x.startTs,taskId:x.taskId,done:!!old?.done || x.done});
+  }
+  return map;
+}
+function seedReceipts(archive, records=archive.sessions){
+  const receipts=receiptIndex(archive.handoffReceipts);
+  for(const rec of records){
+    const old=receipts.get(rec.id);
+    if(old && !sameSegment(old,rec)) throw new Error("同一记录 ID 的归属冲突，需核查原数据");
+    const next=receiptFor(rec);
+    if(old){ next.minutes=Math.max(old.minutes,next.minutes); next.done=old.done||next.done; }
+    receipts.set(rec.id,next);
+  }
+  if(receipts.size>RECEIPT_CAP) throw new Error("交接凭据已达容量上限；未保存，请保留原数据");
+  archive.handoffReceipts=Array.from(receipts.values());
+  return receipts;
+}
+/* 对已入账的累计前缀只补差额；同 ID 不能变任务/类型/起点。此函数仅修改调用方的候选档。 */
+function applySessionRecords(archive, records){
+  const receipts=seedReceipts(archive), sessions=new Map(archive.sessions.map(x=>[x.id,x]));
+  let added=0;
+  for(const value of records){
+    const rec=cleanSession(value), old=receipts.get(rec.id);
+    if(old && !sameSegment(old,rec)) throw new Error("同一记录 ID 的归属冲突，需核查原数据");
+    if(old && rec.minutes<old.minutes) continue;
+    if(receiptCovers(old,rec)) continue;
+    const minutes=Math.round((rec.minutes-(old?.minutes||0))*10)/10;
+    const done=rec.type==="focus" && rec.status==="done" && !old?.done ? 1 : 0;
+    if(old?.done) rec.status="done";
+    if(rec.type==="focus" && rec.taskId){
+      let task=archive.tasks.find(x=>x.id===rec.taskId);
+      if(!task){
+        if(archive.tasks.length>=3000) throw new Error("任务容量不足，交接未合并；请保留原数据");
+        task=cleanTask({id:rec.taskId,title:rec.taskTitle||"恢复的任务",focusMin:0,donePomo:0});
+        archive.tasks.push(task);
+      }
+      task.focusMin=Math.round(((Number(task.focusMin)||0)+minutes)*10)/10;
+      task.donePomo=(Number(task.donePomo)||0)+done;
+    }
+    receipts.set(rec.id,receiptFor(rec)); sessions.set(rec.id,rec); added++;
+  }
+  if(receipts.size>RECEIPT_CAP) throw new Error("交接凭据已达容量上限；未保存，请保留原数据");
+  archive.sessions=Array.from(sessions.values());
+  archive.handoffReceipts=Array.from(receipts.values());
+  return added;
+}
 function mergeSave(d){
   const m = clone(DEF);
   if(!d || typeof d!=="object") return m;
+  if(Number(d.ver)>DEF.ver) throw new Error("存档版本高于当前程序");
   m.settings    = cleanSettings(d.settings);
   m.collections = (Array.isArray(d.collections) && d.collections.length)
     ? d.collections.filter(c=>c&&c.id&&c.name).slice(0,60).map(c=>({id:String(c.id).slice(0,24),name:String(c.name).slice(0,20)}))
     : m.collections;
   m.tasks       = Array.isArray(d.tasks) ? d.tasks.filter(t=>t&&t.id&&typeof t.title==="string").slice(0,3000).map(cleanTask) : [];
-  m.sessions    = capSessions(d.sessions);
+  const allSessions=(Array.isArray(d.sessions)?d.sessions:[])
+    .filter(x=>x && typeof x==="object" && (x.minutes!=null || x.day!=null)).map(cleanSession);
+  m.handoffReceipts=d.handoffReceipts || [];
+  seedReceipts(m,allSessions);                // 迁移/导入先记凭据，再截断显示窗口
+  m.sessions=capSessions(allSessions);
   m.activeTaskId= m.tasks.some(t=>t.id===d.activeTaskId) ? String(d.activeTaskId) : null;
   m.cycle       = Number.isInteger(d.cycle) ? Math.min(m.settings.every, Math.max(0,d.cycle)) : 0;
   m.lastGoalDay = (typeof d.lastGoalDay==="string" && dayReal(d.lastGoalDay)) ? d.lastGoalDay : "";
@@ -1788,23 +1866,45 @@ function firstRunDark(){
 }
 function load(){
   let raw = null;
+  loadWriteProtected = true; loadCorrupt = false; corruptRaw = null;
   try{ raw = localStorage.getItem(STORE_KEY); }
-  catch(e){ storageOK = false; }              // 隐私模式/禁用存储：启动本身不该崩
-  if(!raw){ const m = clone(DEF); m.settings.dark = firstRunDark(); return m; }
-  try{ return mergeSave(JSON.parse(raw)); }
+  catch(e){ storageOK = false; return clone(DEF); } // 没读到旧档不等于没有旧档，存储恢复后也不能直接覆盖
+  if(!raw){ loadWriteProtected = false; const m = clone(DEF); m.settings.dark = firstRunDark(); return m; }
+  let parsed=false;
+  try{ const data=JSON.parse(raw); parsed=true; const m = mergeSave(data); loadWriteProtected = false; return m; }
   catch(e){
-    /* 解析失败：先把原文另存一份再按初始数据启动。否则这次会话里任何一次 save()（包括关窗时的
-       pagehide）都会把"其实只是坏了一处"的旧档覆盖成空档 —— 那不是恢复失败，那是二次数据丢失。 */
-    try{ if(!localStorage.getItem(STORE_KEY+".corrupt")) localStorage.setItem(STORE_KEY+".corrupt", raw); }catch(_){}
-    loadCorrupt = true;
+    // 合法 JSON 的未来版本/receipt 异常不能降级为空档后覆盖；导出仍能取回原始字节。
+    if(parsed){ loadCorrupt=true; corruptRaw=raw; console.warn("存档需核查",e); return clone(DEF); }
+    /* 只有备份字节与本次原文完全一致才算保全；不覆盖另一份唯一坏档。
+       配额不足/读取失败/已有不同备份时保持写保护，原文仍可从导出入口取走。 */
+    loadCorrupt = true; corruptRaw = raw;
+    try{
+      if(localStorage.getItem(STORE_KEY+".corrupt") === null) localStorage.setItem(STORE_KEY+".corrupt", raw);
+      loadWriteProtected = localStorage.getItem(STORE_KEY+".corrupt") !== raw;
+    }catch(_){}
     console.warn("读取存档失败，使用默认",e);
     return clone(DEF);
   }
 }
-function save(){
-  if(dualReadOnly) return;      // 只读窗口写下去的就是旧快照，那正是"别的窗口的记录消失"的来路
-  try{ localStorage.setItem(STORE_KEY, JSON.stringify(S)); }
-  catch(e){ if(storageOK){ storageOK=false; toast("浏览器不允许本机存储，数据只在本次运行有效"); } }
+function save(candidate=S){
+  if(dualReadOnly || loadWriteProtected) return false;
+  try{
+    const persisted=clone(candidate);
+    seedReceipts(persisted);
+    const raw = JSON.stringify(persisted);
+    /* 每次提交直接核对持久化所有者，不能把未更新的只读标记或过期心跳当写权。
+       这只是保守闸门，不是原子互斥；读键与写档之间的全局竞态仍需后续解决。 */
+    if(String(localStorage.getItem(OWNER_KEY) || "").split(":")[0] !== WIN_ID) return false;
+    localStorage.setItem(STORE_KEY, raw);
+    if(localStorage.getItem(STORE_KEY)!==raw) return false;
+    storageOK = true;
+    if(candidate===S) S.handoffReceipts=persisted.handoffReceipts;
+    acknowledgeHandoffs(persisted);            // 主档回读确认之后才可消费，删除失败仍由 receipt 去重
+    return true;
+  }catch(e){
+    if(storageOK){ storageOK=false; toast("浏览器不允许本机存储，数据只在本次运行有效"); }
+    return false;
+  }
 }
 /* 拖动滑块/连续打字时别每帧 stringify 整个存档 */
 let saveTimer = null;
@@ -1816,6 +1916,8 @@ function flushSave(){ if(saveTimer){ clearTimeout(saveTimer); saveTimer=null; } 
    结果是存档永远读不出来、直接被默认值覆盖。 */
 let storageOK = true;
 let loadCorrupt = false;
+let loadWriteProtected = false;             // 原档未读到或坏档未保全：独立于临时存储错误，禁止后续覆盖
+let corruptRaw = null;
 let S = load();
 function dayKey(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 function esc(t){ return String(t).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
@@ -1829,12 +1931,111 @@ function esc(t){ return String(t).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;"
    横幅讲清楚并留接管入口），每秒看一次键：记录者关窗时 pagehide 当场让出键，最坏 5 秒
    心跳过期后只读窗口自动上位，上位前先取最新存档，绝不拿旧快照写。
    接管是唯一的抢占通道：B 点下去就把键写成自己，A 在下一拍（或 storage 事件当场）看到键上
-   换了人，于是走 App 自己的"提前结束"通道 abort() 把手上这段记进存档再转只读——换窗口不丢番茄。
+   换了人，于是先把手上这段保全到本窗口独有 journal，再转只读；不再用旧快照覆盖新记录者。
+   journal 通过导出备份合并取回，未恢复之前保留；这不是跨窗口原子互斥的保证。
    上一版是每窗一把心跳键＋比 id 定序：B 接管后 A 因为"自己更老"永远不让位，两扇窗照旧同时写。 */
 const OWNER_KEY = "fanqie-alarm.owner";             // 值 = "窗口id:最后一次心跳的 Date.now()"
 const LEGACY_KEYS = "fanqie-alarm.window.";         // 上一版留下的每窗心跳键，开页清扫一次
 const WIN_ID = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const OWN_LIVE = 5000;                               // 心跳 2s 一发；5s 没动静才算记录者不在了
+const HANDOFF_PREFIX = STORE_KEY + ".handoff.";
+const uncommittedSessions = new Map();                // 只保留本地未提交记录；不把整个旧 S 回灌给新记录者
+let rtNeedsReview = false;
+function handoffSnapshot(){
+  const records = [], entries = []; let readable = true;
+  try{
+    for(let i=0;i<localStorage.length;i++){
+      const key = localStorage.key(i);
+      if(!key || !key.startsWith(HANDOFF_PREFIX)) continue;
+      try{
+        const raw = localStorage.getItem(key);
+        if(!raw || raw.length>65536){ readable=false; continue; }
+        const item = JSON.parse(raw);
+        if(!item || item.ver!==1 || !item.session || !key.endsWith("."+item.session.id)){
+          readable=false; continue;
+        }
+        const rec = capSessions([item.session])[0];
+        if(!rec || rec.id!==item.session.id){ readable=false; continue; }
+        records.push(rec); entries.push({key,raw,session:rec});
+      }catch(_){ readable=false; }
+    }
+  }catch(_){ readable=false; }
+  return {records, entries, readable};
+}
+function refreshUncommitted(){
+  const old=T.status!=="idle" && uncommittedSessions.get(T.sid);
+  if(!old) return;
+  const minutes=Math.round(Math.max(0,recordSec()/60)*10)/10;
+  dlClose();
+  uncommittedSessions.set(T.sid,sessionDraft(T.kind,minutes,old.status,old.reason,dlSplit(minutes)));
+}
+function archiveForExport(){
+  refreshUncommitted();
+  const pending = handoffSnapshot();
+  // 磁盘是基础；仅添加本地唯一的待提交记录，而不是过时的任务/设置/历史 S。
+  const raw=localStorage.getItem(STORE_KEY);
+  const archive=raw ? mergeSave(JSON.parse(raw)) : clone(DEF);
+  const added=applySessionRecords(archive,[...pending.records,...uncommittedSessions.values()]);
+  // 导出不截断新合并的恢复记录，也不消费 journal。导入会先保存全部 receipt 再保留显示窗口。
+  return {archive, added, readable:pending.readable};
+}
+function acknowledgeHandoffs(archive){
+  const receipts=receiptIndex(archive.handoffReceipts);
+  for(const [id,rec] of uncommittedSessions){
+    if(receiptCovers(receipts.get(id),rec)) uncommittedSessions.delete(id);
+  }
+  for(const entry of handoffSnapshot().entries){
+    if(!receiptCovers(receipts.get(entry.session.id),entry.session)) continue;
+    try{
+      if(localStorage.getItem(entry.key)===entry.raw) localStorage.removeItem(entry.key);
+    }catch(_){}                               // 删不掉也不会再次累计；不抹掉较新的 journal
+  }
+}
+function preserveSession(rec){
+  const key=HANDOFF_PREFIX+WIN_ID+"."+rec.id;
+  try{
+    const raw=JSON.stringify({ver:1,sourceStart:rec.startTs,session:rec});
+    if(raw.length>65536) return false;
+    const oldRaw=localStorage.getItem(key);
+    if(oldRaw){
+      const old=JSON.parse(oldRaw);
+      if(old.ver!==1 || !old.session || !sameSegment(old.session,rec)) return false;
+      if(receiptCovers(receiptFor(old.session),rec)) return true;
+    }
+    localStorage.setItem(key,raw);
+    return localStorage.getItem(key)===raw;
+  }catch(_){ return false; }
+}
+function preserveYield(){
+  const minutes=Math.round(Math.max(0,recordSec()/60)*10)/10;
+  dlClose();
+  const rec=recordSession(T.kind,minutes,"abort","另一个窗口接管了记录",dlSplit(minutes));
+  return preserveSession(rec);
+}
+function holdUncommitted(){
+  T.acc=usedSec(); dlBook(); T.status="pause"; T.hold=false; T.awayAt=0;
+  setNoise(); playBlocked(false); exitFs(); render();
+}
+function settleSession(rec){
+  try{
+    const candidate=clone(S);
+    const prior=candidate.handoffReceipts.find(x=>x.id===rec.id);
+    if(rec.status==="done"){
+      if(rec.type==="focus" && !prior?.done) candidate.cycle=(candidate.cycle||0)+1;
+      else if(rec.type==="long") candidate.cycle=0;
+    }
+    applySessionRecords(candidate,uncommittedSessions.values());
+    candidate.sessions=candidate.sessions.slice(-CAP);
+    if(save(candidate)){ S=candidate; statsDirty(); return "committed"; }
+  }catch(err){ toast(err.message); }
+  if(preserveSession(rec)){
+    toast("本段已暂存待恢复；点“导出”可取回，尚未写入统计");
+    return "preserved";
+  }
+  holdUncommitted();
+  toast("本段保存及暂存失败，计时已保留并暂停；请勿关闭，立即点“导出”保存恢复副本");
+  return false;
+}
 let dualReadOnly = false;
 let dualPoll = 0;                                    // 只在只读时存在的 1s 巡查；正常单窗口不占常驻定时器
 let lastArchive = null;                              // 最新那份原文：上位时用它，不必等下一次 load
@@ -1855,22 +2056,27 @@ function beat(){
 }
 function dualPollStart(){ if(!dualPoll) dualPoll = setInterval(beat, 1000); }
 function dualPollStop(){ if(dualPoll){ clearInterval(dualPoll); dualPoll = 0; } }
-function dualSetReadOnly(on){
+function dualSetReadOnly(on, preserveRunning=false){
   if(dualReadOnly === on) return;
   dualReadOnly = on;
   const w = document.getElementById("dualWarn");
   if(w) w.classList.toggle("on", on);
-  if(on){ stopAll(); dualPollStart(); render();        // stopAll 之后 saveRT 已被只读闸门拦住，不会碰对方的 RT
-    try{ lastArchive = localStorage.getItem(STORE_KEY); }catch(_){ lastArchive = null; } }
-  else { let fresh = null;                             // 上位前先用最新档，绝不把旧快照写回去
-    try{ if(lastArchive) fresh = mergeSave(JSON.parse(lastArchive)); }catch(_){ fresh = null; }
-    S = fresh || load(); dualPollStop(); renderAll(); claimOwner(); }
-}
-/* 让位：正在跑的那一段按"提前结束"记账（≥1 分钟才记，不然只是噪音），然后转只读 */
-function dualYield(){
-  if(T.status !== "idle"){
-    if(usedSec() >= 60) abort("另一个窗口接管了记录");
+  if(on){
+    if(preserveRunning) holdUncommitted();
     else stopAll();
+    dualPollStart(); render();                       // 先设只读，再清运行态，不能删除对方的 RT
+    try{ lastArchive = localStorage.getItem(STORE_KEY); }catch(_){ lastArchive = null; } }
+  else {                                      // 直接读盘，不依赖尚未送达的 STORE 事件；本地未提交记录另存于 Map
+    S = load(); dualPollStop(); renderAll(); claimOwner(); }
+}
+/* 让位时主档已属于另一窗口；本段先保全到独有 journal，不以旧快照覆盖新记录者。 */
+function dualYield(){
+  if(T.status !== "idle" && usedSec() >= 60){
+    const preserved=preserveYield();
+    dualSetReadOnly(true,!preserved);
+    toast(preserved ? "本段已暂存待恢复；点“导出”可连同最新记录取回，尚未写入统计"
+      : "本段暂存失败，计时已保留并暂停；请勿关闭，立即点“导出”保存恢复副本");
+    return;
   }
   dualSetReadOnly(true);
 }
@@ -1883,7 +2089,7 @@ setTimeout(() => {
   else claimOwner();     // 空位/过期：当场占下，不等下一拍心跳（否则头两秒里键上是空的）
 }, 0);
 setInterval(beat, 2000);
-window.addEventListener("pagehide", releaseOwner);
+// pagehide 在最终刷盘之后才释放所有权（见开机段的持久化监听器）。
 const takeBtn = document.getElementById("dualTake");
 if(takeBtn) takeBtn.addEventListener("click", () => dualPromote("现在由这个窗口记录"));
 
@@ -2059,7 +2265,7 @@ function setNoise(force){
    Date.now() 只留给"记录发生在哪一天/几点"这类日历用途。 */
 const mono = () => (window.performance && performance.now ? performance.now() : Date.now());
 const T = {kind:"focus", total:0, startAt:0, acc:0, status:"idle", awayTotal:0, awayAt:0, hold:false, swAt:0, beat:0,
-           bk:[], posAt:0, dAcc:0, dAway:0, tm:"count"};   // 后四项＝跨午夜的分桶账游标（见 dlBook）；tm＝这一段起手时的计时方式
+           bk:[], posAt:0, dAcc:0, dAway:0, tm:"count", sid:null, task:null};   // 后四项＝跨午夜的分桶账游标（见 dlBook）；tm＝这一段起手时的计时方式
 function secsFor(kind){ return Math.max(1,(S.settings[kind==="focus"?"focus":kind==="short"?"short":"long"]|0))*60; }
 function fmt(sec){ sec=Math.max(0,Math.round(sec)); const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;
   return h? h+":"+String(m).padStart(2,"0")+":"+String(s).padStart(2,"0") : String(m).padStart(2,"0")+":"+String(s).padStart(2,"0"); }
@@ -2270,7 +2476,7 @@ function checkDone(){ if(T.status==="run" && S.settings.timing!=="none" && usedS
 /* 进行中的那一段单独落盘：桌面上的 App 随时可能被关掉，一段跑了 18 分钟的专注
    不该因为窗口没关好就凭空消失。恢复时按"已暂停"回来，不补计离线时间。 */
 function saveRT(){
-  if(!storageOK || dualReadOnly) return;
+  if(rtNeedsReview || !storageOK || dualReadOnly || ownerSlot().id!==WIN_ID) return;
   try{
     if(T.status==="idle"){ localStorage.removeItem(RT_KEY); return; }
     /* 先把"正在跑的那一截"并进分桶账再落盘：快照里的 acc／bk／pos 三者同源。
@@ -2281,7 +2487,8 @@ function saveRT(){
     /* 不计时模式没有"到点"这回事：快照照实写已专注秒数，绝不拿 total 封顶，
        否则专注两小时后关窗，回来只剩 25 分钟（实测丢 5700 秒）。 */
     const tm = T.tm || S.settings.timing;
-    localStorage.setItem(RT_KEY, JSON.stringify({kind:T.kind,total:T.total,
+    ensureTimerIdentity(); refreshUncommitted();
+    localStorage.setItem(RT_KEY, JSON.stringify({sid:T.sid,task:T.task,kind:T.kind,total:T.total,
       acc: tm==="none" ? Math.round(usedSec()) : Math.min(usedSec(),T.total),
       tm: tm, status:T.status,ts:Date.now(),day:dayKey(new Date()),sw:T.swAt,bk:T.bk,pos:T.posAt}));
   }catch(e){}
@@ -2290,10 +2497,17 @@ function restoreRT(){
   let r=null;
   try{ r = localStorage.getItem(RT_KEY); }catch(e){ return false; }
   if(!r) return false;
+  if(loadWriteProtected){ rtNeedsReview=true; return false; } // 主档 receipt 未能核查，也不能再次结算
   try{
     r = JSON.parse(r);
     const okKind = r && ["focus","short","long"].includes(r.kind);
     const acc = Number(r.acc);
+    // 扫描不完整不等于无 journal：保留 RT 字节，阻止继续/结算，待可读取后重开核查。
+    const pending=handoffSnapshot();
+    if(!pending.readable){ rtNeedsReview=true; return false; }
+    const applied=[...pending.records,...S.handoffReceipts];
+    if(applied.some(x=>(r.sid ? x.id===r.sid : x.type===r.kind && x.startTs===Number(r.sw))
+      && acc<=x.minutes*60+6)) return false;
     const tm = r && r.tm === "none" ? "none" : "count";
     const ageMin = (Date.now() - (Number(r.ts)||0))/60000;
     if(!okKind || !Number.isFinite(acc) || acc < 1 || ageMin > 720){ localStorage.removeItem(RT_KEY); return false; }
@@ -2307,6 +2521,10 @@ function restoreRT(){
     T.awayAt = 0; T.awayTotal = 0; T.hold = false;
     // 旧快照里没有 sw 这一项：拿"最后一次落盘的时刻 − 已积累秒数"兜底，归属仍比按结束时刻准
     T.swAt = Number(r.sw) > 0 ? Number(r.sw) : Math.max(0, (Number(r.ts)||Date.now()) - Math.round(T.acc*1000));
+    T.sid=typeof r.sid==="string" && r.sid && r.sid.length<=32 ? r.sid : "rt-"+r.kind+"-"+T.swAt;
+    T.task=r.task && typeof r.task.id==="string" ? {id:r.task.id.slice(0,32),title:String(r.task.title||"").slice(0,120)}
+      : (Object.prototype.hasOwnProperty.call(r,"task") ? null
+        : (activeTask() ? {id:activeTask().id,title:activeTask().title} : null));
     /* 分桶账跟着回来：游标必须不早于起表时刻，否则整本作废、按 acc 从起点重建（老快照没这两项＝走重建那条）。
        dAcc 不从快照读，由 bk 自己的秒数合计推出——它是"账本已走到哪一秒的在场量"，与 bk 同源才不会分家。 */
     const bk = dlCleanBK(r.bk), pos = Number(r.pos);
@@ -2321,7 +2539,11 @@ function start(kind){
   /* 可选的第二参数：临时时长（"再来 5 分钟"用）。签名保持 start(kind) 是为了不惊动验收里
      timing_harness 的切片锚点——那里按整串 `function start(kind){` 切代码。 */
   const totalSec = arguments[1];
-  if(dualReadOnly){ toast("这个窗口只读：要在这里记录，请按横幅上的“我确定要用这个窗口”"); return; }
+  if(rtNeedsReview){ toast("上次计时待核查：恢复存储读取后请重新打开；原快照未删除"); return; }
+  if(dualReadOnly || ownerSlot().id!==WIN_ID){ toast("这个窗口只读：要在这里记录，请按横幅上的“我确定要用这个窗口”"); return; }
+  if(T.status!=="idle") return;
+  T.sid=newSessionId();
+  const task=activeTask(); T.task=task ? {id:task.id,title:task.title} : null;
   T.kind = kind||T.kind;
   T.total = (typeof totalSec==="number" && totalSec>0) ? totalSec : secsFor(T.kind);
   T.status="run"; T.startAt=mono(); T.acc=0; T.awayTotal=0; T.awayAt=0; T.hold=false;
@@ -2351,6 +2573,9 @@ function pause(freezeSec){
 }
 function resume(){
   if(T.status!=="pause") return;
+  if(rtNeedsReview || dualReadOnly || ownerSlot().id!==WIN_ID){ toast("这个窗口只读或计时待核查，不能继续；请先确认记录权"); return; }
+  const pending=uncommittedSessions.get(T.sid);
+  if(pending) pending.status="abort";          // 未提交的完成尝试被继续，不提前累计完成次数
   T.startAt = mono(); beatOn();   // acc 保留，usedSec 从 acc 继续累加；休眠基准跟着挪到"这一拍还在"
   T.status="run"; T.awayAt=0; T.hold=false;
   dlBook();                                    // 暂停期间没在场，一秒都不进桶
@@ -2358,34 +2583,57 @@ function resume(){
   setNoise(); render(); saveRT();
 }
 function stopAll(){
+  // 已尝试结算的草稿不能从另一条重置/切换入口绕过保全；普通未结算段的显式丢弃仍保留。
+  refreshUncommitted();
+  const pending=T.status!=="idle" && uncommittedSessions.get(T.sid);
+  if(pending && !preserveSession(pending)){
+    holdUncommitted(); toast("本段仍未保全，暂不能清除；请恢复存储或先导出"); return false;
+  }
+  T.sid=null; T.task=null;
   T.status="idle"; T.acc=0; T.awayAt=0; T.awayTotal=0; T.hold=false; T.swAt=0; T.total=secsFor(T.kind);
   dlReset();                                  // 账本跟着这一段一起作废
   playBlocked(false); exitFs(); setNoise(); render(); saveRT();
+  return true;
 }
-function recordSession(type, minutes, status, reason, split){
+function newSessionId(){ return "s"+Date.now().toString(36)+Math.random().toString(36).slice(2,12); }
+function ensureTimerIdentity(){
+  if(!T.sid){
+    T.sid=newSessionId();
+    const task=activeTask(); T.task=task ? {id:task.id,title:task.title} : null;
+  }
+  return T.sid;
+}
+function sessionDraft(type, minutes, status, reason, split){
   const now=new Date();
   /* 归属看"什么时候开始"：23:50 开始的三小时属于前一天，不该整段算成凌晨那一次。
      ts 仍是记录时刻（列表按它排序），startTs/day/hour 跟着起点走；
      CSV 用 startTs 拼日期时间，跨零点记录不再出现"昨晚凌晨"的错觉。 */
   const st = T.swAt>0 ? new Date(T.swAt) : now;
-  const rec = {id:"s"+Date.now()+Math.random().toString(36).slice(2,6), ts:now.getTime(), startTs:st.getTime(),
+  const active=T.status==="run" || T.status==="pause";
+  const rec = {id:active ? ensureTimerIdentity() : newSessionId(), ts:now.getTime(), startTs:st.getTime(),
     day:dayKey(st), hour:st.getHours(), type, minutes:Math.round(Math.max(0,minutes)*10)/10, status, reason:reason||null};
   /* 任务归属：这一版之后完成的专注会记下任务名，统计页的"任务投入"与最近记录都靠它。
      任务后来被删掉也不影响历史记录（标题已经拷进记录里）。 */
   if(type==="focus"){
-    const tk = activeTask();
+    const tk = active ? T.task : activeTask();
     if(tk){
       rec.taskId = tk.id; rec.taskTitle = tk.title;
-      tk.focusMin = Math.round(((Number(tk.focusMin)||0) + rec.minutes)*10)/10;
     }
   }
   /* 跨零点的记录再带一张分桶表（两片以上才写：一片＝旧口径，老存档与它逐字节同形，导入端也不用特判）。
      形状或总和对不上就当没写——统计随即退回"整段归起表那天"，比按一张可疑的表分账安全。 */
   const sp = dlCleanSplit(split, rec.minutes);
   if(sp && sp.length>1) rec.split = sp;
-  S.sessions.push(rec);
-  if(S.sessions.length>4000) S.sessions.splice(0,S.sessions.length-4000);
-  statsDirty();
+  return rec;
+}
+function recordSession(type, minutes, status, reason, split){
+  const rec=sessionDraft(type,minutes,status,reason,split);
+  uncommittedSessions.set(rec.id,rec);
+  // 独立历史记录仍支持批量补记；进行时段只建草稿，由 settleSession 确认后更新统计。
+  if(T.status!=="run" && T.status!=="pause"){
+    applySessionRecords(S,[rec]); S.sessions=S.sessions.slice(-CAP); statsDirty();
+  }
+  return rec;
 }
 function donePomos(){ return stats().pomos; }
 /* 跳过＝"这一段我不要了"。刚点上（不足 5 秒）就按跳过，留一条 0 分钟的"中断"没有任何信息量，
@@ -2395,28 +2643,24 @@ function skipFocusRecord(){
   if(usedSec() < 5) return false;
   const m = Math.round(recordSec()/6)/10;   // 与 recordSession 存的那个数取同一个 0.1 分整，分桶表才能对得上总和
   const sp = (dlClose(), dlSplit(m));
-  recordSession("focus", m, "abort", "跳过", sp);
-  return true;
+  return settleSession(recordSession("focus", m, "abort", "跳过", sp));
 }
 function complete(){
+  if(T.status==="idle" || rtNeedsReview) return;
   const kind = T.kind;
   const mins = recordSec()/60;
-  const awayMin = T.awayTotal/60000;         // 结束弹层要说清楚"离开多少没计入"，否则数字看上去像随机掉的
-  playAlarm();
-  const recMin = Math.round((kind==="focus" ? Math.max(0.2,mins) : mins)*10)/10;   // 先取整，分桶表与 minutes 才可能对得上
-  const sp = (dlClose(), dlSplit(recMin));      // dlClose 只固化正在跑的那一截，usedSec 的值一个字都不变
-  recordSession(kind, recMin, "done", null, sp);
-  if(kind==="focus"){
-    const tk = activeTask();
-    if(tk){ tk.donePomo=(tk.donePomo||0)+1; }
-    S.cycle=(S.cycle||0)+1;
-  } else if(kind==="long"){ S.cycle=0; }
-  T.status="idle"; T.hold=false; T.awayAt=0; setNoise(); saveRT(); dlReset();
-  if(S.settings.mode==="xueba") exitFs();      // 学霸的全屏是"锁住这一段"的，段结束了就该还给用户
-  statsDirty();
+  const awayMin = T.awayTotal/60000;         // 结束弹层要说清楚离开多少没计入
+  const recMin = Math.round((kind==="focus" ? Math.max(0.2,mins) : mins)*10)/10;
+  const sp = (dlClose(), dlSplit(recMin));
+  const result=settleSession(recordSession(kind, recMin, "done", null, sp));
+  if(!result) return;
   const next = nextKind(kind);
+  if(!stopAll()) return;
   T.kind=next; T.total=secsFor(next);
-  save(); renderAll();
+  T.awayTotal=awayMin*60000;                   // 保持完成后的离开说明口径，下一次 start 再归零
+  renderAll();
+  if(result!=="committed") return;          // 暂存不冒充已入账，不自动下一段或发成功通知
+  playAlarm();
   if(typeof notifyDone==="function") notifyDone(kind, recMin);
   if(typeof maybeGoalHit==="function") maybeGoalHit();
   if(S.settings.autoNext){ start(next); toast(kind==="focus"?"番茄完成，自动开始休息":"休息结束，自动开始专注"); }
@@ -2427,22 +2671,21 @@ function nextKind(k){
   return (S.cycle||0) >= (S.settings.every||4) ? "long" : "short";
 }
 function abort(reason, awayMs){
+  if(T.status==="idle" || rtNeedsReview) return;
   const mins = recordSec()/60;                 // 离开的那段在停表时就没计入，这里不需要再剥
   const recMin = Math.round(Math.max(0,mins)*10)/10;
   const sp = (dlClose(), dlSplit(recMin));     // 中断那一段同样按天切：0 点前的在场量归 0 点前那天
-  recordSession(T.kind, recMin, "abort", reason, sp);
+  const result=settleSession(recordSession(T.kind, recMin, "abort", reason, sp));
+  if(!result) return;
   /* 手动结束／学霸中断这类"跨了零点的一段"也要当场说清两天各拿了多少：以前只有正常响铃那条路（showEnd）讲，
      中断那条路只报一个总数，用户看到"120 分钟"还是不知道昨天该加 60 还是 0。同一天时 dlText 给空串，不多嘴。 */
   const spTxt = dlText(sp);
-  toast("已记录："+(reason||"结束")+" · "+(Math.round(mins)<1?"不足 1 分钟":Math.round(mins)+" 分钟")+
+  if(result==="committed") toast("已记录："+(reason||"结束")+" · "+(Math.round(mins)<1?"不足 1 分钟":Math.round(mins)+" 分钟")+
         (awayMs>0 ? "（离开 "+Math.round(awayMs/60000)+" 分钟没计入）" : "") +
         (spTxt ? "｜跨了零点，两天各记："+spTxt : ""));
-  const nk=nextKind(T.kind);
-  T.status="idle"; T.kind=nk; T.total=secsFor(nk); T.acc=0; T.awayAt=0; T.awayTotal=0; T.hold=false;
-  dlReset();
-  setNoise(); playBlocked(false); exitFs(); saveRT();
-  statsDirty();
-  save(); renderAll();
+  const next=nextKind(T.kind);
+  if(!stopAll()) return;
+  T.kind=next; T.total=secsFor(next); renderAll();
 }
 function showEnd(kind, mins, next, awayMin, splitText){
   const m=$("maskEnd");
@@ -2641,17 +2884,22 @@ function renderSegs(){
       b.classList.toggle("sel", b.dataset.v===cur);
       b.onclick=async ()=>{
         if(b.classList.contains("sel")) return;   // 点已经选中的那颗：别弹二次确认、别把这段计时重启
+        const sid=T.status!=="idle" ? ensureTimerIdentity() : null;
         if(key==="kind"){
           if(T.status!=="idle" && !(await ask({title:"切换类型",
             text:"正在计时，切换到「"+labelOf(b.dataset.v)+"」？当前这一段不会记入统计。", ok:"切换"}))) return;
-          T.kind=b.dataset.v; T.total=secsFor(T.kind);
-          stopAll(); save();          // stopAll 里会 setNoise()：以前手工置 idle 会让白噪音在切换后一直放
+          if(T.sid!==sid) return toast("原计时段已变化，本次切换未生效");
+          if(!stopAll()) return;
+          T.kind=b.dataset.v; T.total=secsFor(T.kind); render(); save();
         } else {
           /* 计时方式中途一改，正在跑的这段同样会被丢掉 —— 原来只有"类型"这条路会二次确认，
              切"正计时/不计时"是静默清零，同一件事两种待遇。现在两处都问。 */
           if(key==="timing" && T.status!=="idle" && !(await ask({title:"切换计时方式",
             text:"正在计时，改成「"+b.textContent.trim()+"」会结束当前这一段，且不记入统计。", ok:"切换"}))) return;
-          if(key==="timing" && T.status!=="idle") stopAll();
+          if(key==="timing"){
+            if(T.sid!==sid) return toast("原计时段已变化，本次切换未生效");
+            if(T.status!=="idle" && !stopAll()) return;
+          }
           S.settings[key]=b.dataset.v;
           if(key==="mode" && b.dataset.v==="xueba" && T.status==="run") requestFs();
           render(); save();
@@ -3482,20 +3730,24 @@ $("btnSkip").onclick=()=>{
   if(T.status==="idle"){ const nk=nextKind(T.kind); T.kind=nk; T.total=secsFor(nk); render(); return; }
   if(T.kind==="focus" && usedSec()>20 && S.settings.mode!=="normal") return openReason();
   if(T.status==="run" && usedSec()>=T.total) return complete();
-  if(T.kind==="focus"){ skipFocusRecord(); }
-  const nk=nextKind(T.kind);
-  T.status="idle"; T.kind=nk; T.total=secsFor(nk); T.acc=0; T.awayAt=0; T.awayTotal=0; T.hold=false;
-  dlReset();                                  // 跳过＝这一段连同它的分桶账一起翻篇
-  setNoise(); playBlocked(false); saveRT(); save(); renderAll();   // saveRT：清空进行时段快照，否则重启会"复活"刚跳过的那一段
+  if(T.kind==="focus"){
+    const needsRecord=usedSec()>=5;
+    if(!skipFocusRecord() && needsRecord) return;
+  } else if(usedSec()>=5){ return abort("跳过"); }
+  const next=nextKind(T.kind);
+  if(!stopAll()) return;
+  T.kind=next; T.total=secsFor(next); renderAll();
 };
 $("btnReset").onclick=async ()=>{
   if(T.status==="idle") return toast("当前没有进行中的计时");
+  const sid=ensureTimerIdentity();
   const mins = Math.round(recordSec()/60);
   /* 重置以前是静默丢弃：跑完 40 分钟误点一下，那 40 分钟既不进统计也没有提示。
      现在给它一次"结束并记录"的机会，代价是多一个弹窗。 */
   if(T.kind==="focus" && mins>=1){
     const keep = await ask({title:"重置计时", danger:true, ok:"结束并记录", no:"直接丢弃",
       text:"这段专注已进行 "+mins+" 分钟。结束并记入统计？选“直接丢弃”则不记录，且无法找回。"});
+    if(T.status==="idle" || T.sid!==sid) return toast("原计时段已变化，本次确认未作用于新计时");
     if(keep) return abort("重置");
   }
   stopAll(); save();
@@ -3553,7 +3805,9 @@ function ask(opts){
 }
 
 let pickedReason=null;
+let reasonSessionId=null;
 function openReason(){
+  reasonSessionId=ensureTimerIdentity();
   pickedReason=null;
   $("reasonChips").innerHTML = REASONS.map(r=>`<button data-r="${esc(r)}">${esc(r)}</button>`).join("")
     + `<button data-r="专注已满，只是想停">想提前停</button>`;
@@ -3567,7 +3821,8 @@ function openReason(){
 $("reasonCancel").onclick=()=>$("maskReason").classList.remove("on");
 $("reasonOk").onclick=()=>{
   const r=(($("reasonCustom").value||"").trim())||pickedReason||"未填写理由";
-  $("maskReason").classList.remove("on"); abort(r);
+  $("maskReason").classList.remove("on");
+  if(T.status!=="idle" && T.sid===reasonSessionId) abort(r);
 };
 function tryEnd(){
   if(T.status==="idle") return;
@@ -3723,10 +3978,16 @@ $("sAllowPause").title="严格模式是否允许暂停";
 
 // 导入导出
 $("btnExport").onclick=()=>{
-  const blob=new Blob([JSON.stringify(S,null,2)],{type:"application/json"});
+  const recovery = loadWriteProtected && corruptRaw !== null;
+  let exported;
+  try{ exported=recovery ? null : archiveForExport(); }
+  catch(err){ toast("导出失败："+err.message+"；请勿关闭或删除原数据"); return; }
+  const blob=new Blob([recovery ? corruptRaw : JSON.stringify(exported.archive,null,2)],{type:"application/json"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
-  a.download="番茄闹钟备份-"+dayKey(new Date())+".json"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),3000);
-  toast("已导出备份文件");
+  a.download=(recovery ? "番茄闹钟坏档原文-" : "番茄闹钟备份-")+dayKey(new Date())+".json"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),3000);
+  toast(recovery ? "已导出坏档原文，请保留文件后再修复；写保护仍然有效"
+    : "已导出备份文件（不含正在计时的快照）"+(exported.added ? "，含 "+exported.added+" 条待交接记录" : "")
+      +(!exported.readable ? "；部分保全数据无法读取，请勿删除原数据" : ""));
 };
 $("btnImport").onclick=()=>{
   if(dualReadOnly) return toast("这个窗口只读：导入不会生效。请点横幅上的“我确定要用这个窗口”，或回到记录者窗口导入");
@@ -3739,14 +4000,29 @@ $("fileIn").onchange=(e)=>{
   r.onload=async ()=>{ try{
       // 走和读档同一条 mergeSave 通道：手改过的备份（every=0、sessions 十万条、非法枚举）
       // 会被夹进合法区间，而不是原样灌进运行中的 S。
-      const m = mergeSave(JSON.parse(r.result));
+      const data = JSON.parse(r.result);
+      // 现有备份 ver=2；无版本号及旧版仍走原净化规则，只拒绝明确高于本版的版本（含数字字符串）。
+      if(data && Number(data.ver) > DEF.ver){ toast("备份版本高于当前程序，请用较新版本恢复；当前数据未改动"); return; }
+      const m = mergeSave(data);
       /* 导入是覆盖式的：先把"会被换成什么"摊开，再问一次。文件读出来就问，用户还有反悔的余地。 */
       const text = "将用备份覆盖当前数据："+m.tasks.length+" 个任务、"+m.sessions.length+" 条专注记录、"+m.collections.length+" 个待办集。"
         + (T.status!=="idle" ? " 正在计时的那一段会被结束。" : "")
         + " 此操作无法撤销，建议先点“导出”留一份现在的。";
       if(!(await ask({title:"恢复备份", text, ok:"覆盖并恢复", danger:true}))){ toast("已取消导入"); return; }
-      S = m; stopAll(); statsDirty(); save(); applySettingsToUI(); applyTheme(); applyZoom(); renderAll(); toast("已恢复备份");
-    }catch(err){ toast("这个文件读不出来"); } };
+      /* ask 可能挂起很久：确认后重新检查写权。覆盖导入结束当前段，但不是丢弃该段的许可。
+         不改变 T 的累计账，先独立保全；导入提交失败时旧 S/T/RT 保持原样。 */
+      if(dualReadOnly || loadWriteProtected || ownerSlot().id!==WIN_ID){
+        toast("恢复备份未保存：写权已变化或原档受保护；当前数据与计时未改动"); return;
+      }
+      if(T.status!=="idle"){
+        const sp=dlPeekSplit();
+        const rec=sessionDraft(T.kind,recordSec()/60,"abort","恢复备份前结束",sp?.split);
+        uncommittedSessions.set(rec.id,rec);
+        if(!preserveSession(rec)){ toast("恢复备份未保存：当前计时段暂存失败，请先导出；计时未清除"); return; }
+      }
+      if(!save(m)){ toast("恢复备份未保存：写权已变化、原档受保护或存储不可用；当前数据与计时未改动"); return; }
+      S = m; stopAll(); statsDirty(); applySettingsToUI(); applyTheme(); applyZoom(); renderAll(); toast("已恢复备份");
+    }catch(err){ toast("恢复备份失败："+err.message+"；原数据未清除"); } };
   r.readAsText(f); e.target.value="";
 };
 $("btnWipe").onclick=async ()=>{
@@ -4168,10 +4444,15 @@ T.total=secsFor("focus");
 /* 上次关机时还在跑的那一段：按"暂停"姿态回来，离线的时间一律不计入专注。 */
 const _rt = restoreRT();
 renderAll();
-if(_rt) toast("已恢复上次计时（暂停中）");
+if(loadWriteProtected) toast(corruptRaw !== null
+  ? "坏档原文未能另存，已开启存档写保护；请点“导出”保留原文，修复前不会覆盖原档"
+  : "无法读取原存档，已开启存档写保护；请恢复存储访问后重新打开");
+else if(rtNeedsReview) toast("上次计时待核查：部分交接保全无法读取，未恢复计时；原快照仍保留，请恢复存储读取后重新打开",6000);
+else if(_rt) toast("已恢复上次计时（暂停中）");
 else if(loadCorrupt) toast("之前的存档读不出来，已另存为备份，本次按初始数据启动");
-// 窗口关掉/被系统回收前，把存档和进行时段刷进本机存储（beforeunload 在移动端不可靠，pagehide 才是正解）
-window.addEventListener("pagehide",()=>{ flushSave(); saveRT(); });
+else if(handoffSnapshot().records.length) toast("发现待交接的专注记录；点“导出”可取回合并备份，恢复前保全件不会删除",6000);
+// 窗口关掉/被系统回收前，把存档和进行时段刷进本机存储，再释放写权
+window.addEventListener("pagehide",()=>{ flushSave(); saveRT(); releaseOwner(); });
 // 滚动过一点才给底栏加投影：静止在顶部时它是"贴在内容上"的，不该有阴影
 $("main").addEventListener("scroll",()=>{ const v = $("main").scrollTop>4 ? "1" : "0";
   if(document.body.dataset.scrolled!==v) document.body.dataset.scrolled = v; }, {passive:true});
