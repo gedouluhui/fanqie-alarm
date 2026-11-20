@@ -3,6 +3,7 @@
 **中文** · [English](README.en.md)
 
 <p>
+<img alt="ci" src="https://github.com/gedouluhui/fanqie-alarm/actions/workflows/ci.yml/badge.svg">
 <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-lightgrey">
 <img alt="runtime" src="https://img.shields.io/badge/runtime-.NET%20Framework%204%20%2B%20WebView2-blue">
 <img alt="network" src="https://img.shields.io/badge/network-none-brightgreen">
